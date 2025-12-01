@@ -9,6 +9,25 @@ interface ProductStats {
   deliveredAmount: number;
 }
 
+interface DailyProductStats {
+  name: string;
+  count: number;
+  amount: number;
+}
+
+interface DailyStats {
+  date: string;
+  orderedCount: number;
+  deliveredCount: number;
+  cancelledCount: number;
+  inTransitCount: number;
+  products: DailyProductStats[];
+  orderedAmount: number;
+  deliveredAmount: number;
+  cancelledAmount: number;
+  inTransitAmount: number;
+}
+
 interface OzonReportData {
   ordersCount: number;
   totalAmount: number;
@@ -17,6 +36,7 @@ interface OzonReportData {
   products: ProductStats[];
   periodStart: string;
   periodEnd: string;
+  dailyStats: DailyStats[];
 }
 
 export default function OzonSalesAnalysis() {
@@ -25,6 +45,9 @@ export default function OzonSalesAnalysis() {
   const [isLoading, setIsLoading] = useState(false);
   const [reportData, setReportData] = useState<OzonReportData | null>(null);
   const [fileName, setFileName] = useState("");
+
+  // Добавляем новое состояние для отображения отчета по дням
+  const [showDailyReport, setShowDailyReport] = useState(false);
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -66,55 +89,57 @@ export default function OzonSalesAnalysis() {
 
     // Находим индексы нужных колонок
     const quantityIndex = headers.findIndex(
-      (header) => header.toLowerCase().includes("количество") || header === "Q" // Колонка Q
+      (header) => header.toLowerCase().includes("количество") || header === "Q"
     );
 
     const amountIndex = headers.findIndex(
       (header) =>
-        header.toLowerCase().includes("оплачено") || // Колонка "Оплачено покупателем"
+        header.toLowerCase().includes("оплачено") ||
         header.toLowerCase().includes("цена") ||
-        header === "O" // Колонка O
+        header === "O"
     );
 
     const statusIndex = headers.findIndex(
-      (header) => header.toLowerCase().includes("статус") || header === "E" // Колонка E
+      (header) => header.toLowerCase().includes("статус") || header === "E"
     );
 
     const productNameIndex = headers.findIndex(
       (header) =>
         header.toLowerCase().includes("наименование") ||
         header.toLowerCase().includes("товар") ||
-        header === "L" // Колонка L
+        header === "L"
     );
 
-    // Ищем колонку с датой ПРИНЯТИЯ В ОБРАБОТКУ (колонка C)
     const dateIndex = headers.findIndex(
       (header) =>
         header.toLowerCase().includes("принят") ||
         header.toLowerCase().includes("обработк") ||
-        header === "C" // Колонка C
+        header === "C"
     );
 
     // Если не нашли по названиям, используем индексы (Q=16, O=15, E=4, L=9, C=2 если считать с 0)
     const finalQuantityIndex = quantityIndex !== -1 ? quantityIndex : 16;
-    const finalAmountIndex = amountIndex !== -1 ? amountIndex : 15; // Колонка "Оплачено покупателем"
+    const finalAmountIndex = amountIndex !== -1 ? amountIndex : 15;
     const finalStatusIndex = statusIndex !== -1 ? statusIndex : 4;
     const finalProductNameIndex =
       productNameIndex !== -1 ? productNameIndex : 9;
-    const finalDateIndex = dateIndex !== -1 ? dateIndex : 2; // Колонка C
+    const finalDateIndex = dateIndex !== -1 ? dateIndex : 2;
 
     let ordersCount = 0;
     let totalAmount = 0;
     let deliveredCount = 0;
     let deliveredAmount = 0;
 
-    // Объект для группировки по товарам
+    // Объект для группировки по товарам (общий)
     const productsMap: { [key: string]: ProductStats } = {};
 
-    // Массивы для хранения дат
+    // Объект для группировки по дням
+    const dailyStatsMap: { [key: string]: DailyStats } = {};
+
+    // Массив для хранения всех дат
     const allDates: Date[] = [];
 
-    // Обрабатываем данные, начиная со второй строки (первая - заголовок)
+    // Обрабатываем данные, начиная со второй строки
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
       const values = line
@@ -138,16 +163,16 @@ export default function OzonSalesAnalysis() {
           values[finalProductNameIndex] || "Неизвестный товар";
         const dateTime = values[finalDateIndex] || "";
 
-        // Парсим дату из разных форматов
-        if (dateTime) {
-          let parsedDate: Date | null = null;
+        // Парсим дату и извлекаем только дату (без времени)
+        let dateStr = "";
+        let parsedDate: Date | null = null;
 
-          // Пробуем разные форматы дат
+        if (dateTime) {
           if (dateTime.includes("-")) {
-            // Формат: "2025-11-14 16:00:58"
-            parsedDate = new Date(dateTime.replace(" ", "T")); // Заменяем пробел на T для корректного парсинга
+            // Формат: '2025-11-14 16:00:58'
+            parsedDate = new Date(dateTime.replace(" ", "T"));
           } else if (dateTime.includes(".")) {
-            // Формат: "06.11.2025 17:09"
+            // Формат: '06.11.2025 17:09'
             const [datePart, timePart] = dateTime.split(" ");
             const [day, month, year] = datePart.split(".").map(Number);
             if (timePart) {
@@ -160,19 +185,52 @@ export default function OzonSalesAnalysis() {
 
           if (parsedDate && !isNaN(parsedDate.getTime())) {
             allDates.push(parsedDate);
+            // Форматируем дату в строку DD.MM.YYYY
+            dateStr = formatDate(parsedDate);
           }
+        }
+
+        // Инициализируем статистику по дню, если еще не инициализирована
+        if (dateStr && !dailyStatsMap[dateStr]) {
+          dailyStatsMap[dateStr] = {
+            date: dateStr,
+            orderedCount: 0,
+            deliveredCount: 0,
+            cancelledCount: 0,
+            inTransitCount: 0,
+            products: [],
+            orderedAmount: 0,
+            deliveredAmount: 0,
+            cancelledAmount: 0,
+            inTransitAmount: 0,
+          };
         }
 
         // Все заказы
         ordersCount += quantity;
         totalAmount += amount;
 
+        // Обновляем общую статистику по дням
+        if (dateStr) {
+          dailyStatsMap[dateStr].orderedCount += quantity;
+          dailyStatsMap[dateStr].orderedAmount += amount;
+        }
+
         // Только доставленные заказы (выкупы)
-        if (status.toLowerCase().includes("доставлен")) {
+        const isDelivered = status.toLowerCase().includes("доставлен");
+        const isCancelled = status.toLowerCase().includes("отмен");
+        const isInTransit = !isDelivered && !isCancelled;
+
+        if (isDelivered) {
           deliveredCount += quantity;
           deliveredAmount += amount;
 
-          // Добавляем в статистику по товарам
+          if (dateStr) {
+            dailyStatsMap[dateStr].deliveredCount += quantity;
+            dailyStatsMap[dateStr].deliveredAmount += amount;
+          }
+
+          // Добавляем в общую статистику по товарам
           if (!productsMap[productName]) {
             productsMap[productName] = {
               name: productName,
@@ -180,9 +238,39 @@ export default function OzonSalesAnalysis() {
               deliveredAmount: 0,
             };
           }
-
           productsMap[productName].deliveredCount += quantity;
           productsMap[productName].deliveredAmount += amount;
+        }
+
+        // Отмененные заказы
+        if (isCancelled && dateStr) {
+          dailyStatsMap[dateStr].cancelledCount += quantity;
+          dailyStatsMap[dateStr].cancelledAmount += amount;
+        }
+
+        // Заказы в пути
+        if (isInTransit && dateStr) {
+          dailyStatsMap[dateStr].inTransitCount += quantity;
+          dailyStatsMap[dateStr].inTransitAmount += amount;
+        }
+
+        // Добавляем товар в статистику по дням
+        if (dateStr) {
+          // Проверяем, есть ли уже такой товар в статистике дня
+          const existingProduct = dailyStatsMap[dateStr].products.find(
+            (p: DailyProductStats) => p.name === productName
+          );
+
+          if (existingProduct) {
+            existingProduct.count += quantity;
+            existingProduct.amount += amount;
+          } else {
+            dailyStatsMap[dateStr].products.push({
+              name: productName,
+              count: quantity,
+              amount: amount,
+            });
+          }
         }
       }
     }
@@ -192,20 +280,26 @@ export default function OzonSalesAnalysis() {
     let periodEnd = "";
 
     if (allDates.length > 0) {
-      // Сортируем даты в хронологическом порядке
       const sortedDates = [...allDates].sort(
         (a, b) => a.getTime() - b.getTime()
       );
-
-      // Первая дата - начало периода, последняя - конец периода
       periodStart = formatDate(sortedDates[0]);
       periodEnd = formatDate(sortedDates[sortedDates.length - 1]);
     }
 
+    // Преобразуем объект в массив и сортируем по дате (от новых к старым)
+    const dailyStats = Object.values(dailyStatsMap).sort((a, b) => {
+      const [dayA, monthA, yearA] = a.date.split(".").map(Number);
+      const [dayB, monthB, yearB] = b.date.split(".").map(Number);
+      const dateA = new Date(yearA, monthA - 1, dayA);
+      const dateB = new Date(yearB, monthB - 1, dayB);
+      return dateB.getTime() - dateA.getTime(); // Новые даты первыми
+    });
+
     // Преобразуем объект в массив и сортируем по количеству выкупов (по убыванию)
     const products = Object.values(productsMap)
       .sort((a, b) => b.deliveredCount - a.deliveredCount)
-      .filter((product) => product.deliveredCount > 0); // Показываем только товары с выкупами
+      .filter((product) => product.deliveredCount > 0);
 
     return {
       ordersCount: Math.round(ordersCount),
@@ -215,6 +309,7 @@ export default function OzonSalesAnalysis() {
       products,
       periodStart,
       periodEnd,
+      dailyStats,
     };
   };
 
@@ -598,26 +693,363 @@ export default function OzonSalesAnalysis() {
                 )}
               </div>
             </div>
+
+            {/* Кнопка для показа отчета по дням */}
+            {reportData.dailyStats.length > 0 && (
+              <div className="mt-6 text-center">
+                <button
+                  onClick={() => setShowDailyReport(!showDailyReport)}
+                  className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-3 rounded-lg transition-colors font-semibold flex items-center justify-center mx-auto"
+                >
+                  {showDailyReport
+                    ? "Скрыть отчет по дням"
+                    : "Сформировать отчет по дням"}
+                  <svg
+                    className={`w-5 h-5 ml-2 transition-transform ${
+                      showDailyReport ? "rotate-180" : ""
+                    }`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            {/* Отчет по дням */}
+            {showDailyReport && reportData.dailyStats.length > 0 && (
+              <div className="mt-6 bg-white rounded-lg shadow-md p-6">
+                <h3 className="text-2xl font-semibold mb-6 text-center">
+                  Отчет по дням
+                </h3>
+
+                {reportData.dailyStats.map(
+                  (day: DailyStats, dayIndex: number) => (
+                    <div key={dayIndex} className="mb-8 last:mb-0">
+                      {/* Заголовок дня */}
+                      <div className="bg-gray-800 text-white rounded-t-lg p-4">
+                        <h4 className="text-xl font-semibold">
+                          Дата: {day.date}
+                        </h4>
+                      </div>
+
+                      {/* Основная статистика дня */}
+                      <div className="border border-gray-300 border-t-0 rounded-b-lg p-4">
+                        {/* Сводка по статусам */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                          <div className="bg-blue-50 rounded-lg p-4">
+                            <div className="text-lg font-bold text-blue-600">
+                              {day.orderedCount} шт
+                            </div>
+                            <div className="text-sm text-gray-600">
+                              Заказано
+                            </div>
+                            <div className="text-sm text-blue-500">
+                              {day.orderedAmount.toLocaleString()} ₽
+                            </div>
+                          </div>
+
+                          <div className="bg-green-50 rounded-lg p-4">
+                            <div className="text-lg font-bold text-green-600">
+                              {day.deliveredCount} шт
+                            </div>
+                            <div className="text-sm text-gray-600">
+                              Доставлено
+                            </div>
+                            <div className="text-sm text-green-500">
+                              {day.deliveredAmount.toLocaleString()} ₽
+                            </div>
+                          </div>
+
+                          <div className="bg-red-50 rounded-lg p-4">
+                            <div className="text-lg font-bold text-red-600">
+                              {day.cancelledCount} шт
+                            </div>
+                            <div className="text-sm text-gray-600">
+                              Отменено
+                            </div>
+                            <div className="text-sm text-red-500">
+                              {day.cancelledAmount.toLocaleString()} ₽
+                            </div>
+                          </div>
+
+                          <div className="bg-yellow-50 rounded-lg p-4">
+                            <div className="text-lg font-bold text-yellow-600">
+                              {day.inTransitCount} шт
+                            </div>
+                            <div className="text-sm text-gray-600">В пути</div>
+                            <div className="text-sm text-yellow-500">
+                              {day.inTransitAmount.toLocaleString()} ₽
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Детализация по товарам */}
+                        {day.products.length > 0 && (
+                          <div className="mt-4">
+                            <h5 className="font-semibold text-gray-700 mb-3">
+                              Детализация по товарам:
+                            </h5>
+                            <div className="overflow-x-auto">
+                              <table className="w-full border-collapse border border-gray-300">
+                                <thead>
+                                  <tr className="bg-gray-100">
+                                    <th className="border border-gray-300 p-2 text-left">
+                                      Товар
+                                    </th>
+                                    <th className="border border-gray-300 p-2 text-left">
+                                      Количество
+                                    </th>
+                                    <th className="border border-gray-300 p-2 text-left">
+                                      Сумма
+                                    </th>
+                                    <th className="border border-gray-300 p-2 text-left">
+                                      Средняя цена
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {day.products.map(
+                                    (
+                                      product: DailyProductStats,
+                                      productIndex: number
+                                    ) => (
+                                      <tr
+                                        key={productIndex}
+                                        className={
+                                          productIndex % 2 === 0
+                                            ? "bg-white"
+                                            : "bg-gray-50"
+                                        }
+                                      >
+                                        <td className="border border-gray-300 p-2 font-medium">
+                                          {product.name}
+                                        </td>
+                                        <td className="border border-gray-300 p-2">
+                                          {product.count} шт
+                                        </td>
+                                        <td className="border border-gray-300 p-2">
+                                          {product.amount.toLocaleString()} ₽
+                                        </td>
+                                        <td className="border border-gray-300 p-2">
+                                          {Math.round(
+                                            product.amount / product.count
+                                          ).toLocaleString()}{" "}
+                                          ₽
+                                        </td>
+                                      </tr>
+                                    )
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+
+                            {/* Сводка по товарам за день */}
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                              <div className="bg-gray-50 p-3 rounded">
+                                <span className="font-medium">
+                                  Всего товаров:
+                                </span>{" "}
+                                {day.products.length}
+                              </div>
+                              <div className="bg-gray-50 p-3 rounded">
+                                <span className="font-medium">
+                                  Общее количество:
+                                </span>{" "}
+                                {day.products.reduce(
+                                  (sum: number, p: DailyProductStats) =>
+                                    sum + p.count,
+                                  0
+                                )}{" "}
+                                шт
+                              </div>
+                              <div className="bg-gray-50 p-3 rounded">
+                                <span className="font-medium">
+                                  Общая сумма:
+                                </span>{" "}
+                                {day.products
+                                  .reduce(
+                                    (sum: number, p: DailyProductStats) =>
+                                      sum + p.amount,
+                                    0
+                                  )
+                                  .toLocaleString()}{" "}
+                                ₽
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Процентные показатели */}
+                        <div className="mt-6 pt-4 border-t border-gray-200">
+                          <h5 className="font-semibold text-gray-700 mb-2">
+                            Процентные показатели:
+                          </h5>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <div className="flex justify-between mb-1">
+                                <span className="text-sm text-gray-600">
+                                  Процент доставки:
+                                </span>
+                                <span className="text-sm font-medium">
+                                  {day.orderedCount > 0
+                                    ? Math.round(
+                                        (day.deliveredCount /
+                                          day.orderedCount) *
+                                          100
+                                      )
+                                    : 0}
+                                  %
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div
+                                  className="bg-green-500 h-2 rounded-full"
+                                  style={{
+                                    width: `${
+                                      day.orderedCount > 0
+                                        ? (day.deliveredCount /
+                                            day.orderedCount) *
+                                          100
+                                        : 0
+                                    }%`,
+                                  }}
+                                ></div>
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="flex justify-between mb-1">
+                                <span className="text-sm text-gray-600">
+                                  Процент отмен:
+                                </span>
+                                <span className="text-sm font-medium">
+                                  {day.orderedCount > 0
+                                    ? Math.round(
+                                        (day.cancelledCount /
+                                          day.orderedCount) *
+                                          100
+                                      )
+                                    : 0}
+                                  %
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div
+                                  className="bg-red-500 h-2 rounded-full"
+                                  style={{
+                                    width: `${
+                                      day.orderedCount > 0
+                                        ? (day.cancelledCount /
+                                            day.orderedCount) *
+                                          100
+                                        : 0
+                                    }%`,
+                                  }}
+                                ></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                )}
+
+                {/* Сводка по всем дням */}
+                <div className="mt-8 p-4 bg-gray-50 rounded-lg">
+                  <h5 className="font-semibold text-gray-800 mb-3">
+                    Сводка по всем дням:
+                  </h5>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-blue-600">
+                        {reportData.dailyStats
+                          .reduce(
+                            (sum: number, day: DailyStats) =>
+                              sum + day.orderedCount,
+                            0
+                          )
+                          .toLocaleString()}{" "}
+                        шт
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        Всего заказано
+                      </div>
+                    </div>
+
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-green-600">
+                        {reportData.dailyStats
+                          .reduce(
+                            (sum: number, day: DailyStats) =>
+                              sum + day.deliveredCount,
+                            0
+                          )
+                          .toLocaleString()}{" "}
+                        шт
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        Всего доставлено
+                      </div>
+                    </div>
+
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-red-600">
+                        {reportData.dailyStats
+                          .reduce(
+                            (sum: number, day: DailyStats) =>
+                              sum + day.cancelledCount,
+                            0
+                          )
+                          .toLocaleString()}{" "}
+                        шт
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        Всего отменено
+                      </div>
+                    </div>
+
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-yellow-600">
+                        {reportData.dailyStats
+                          .reduce(
+                            (sum: number, day: DailyStats) =>
+                              sum + day.inTransitCount,
+                            0
+                          )
+                          .toLocaleString()}{" "}
+                        шт
+                      </div>
+                      <div className="text-sm text-gray-600">Всего в пути</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Инструкция */}
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mt-6">
-          <h3 className="font-semibold text-yellow-800 mb-2">
+          <h3 className="font-semibold text-yellow-800 mb-2 text-2xl">
             Как получить отчет из Ozon?
           </h3>
-          <ol className="list-decimal list-inside space-y-2 text-yellow-700 text-sm">
+          <ol className="list-decimal list-inside space-y-2 text-yellow-700 text-lg">
             <li>Зайдите в личный кабинет продавца Ozon</li>
-            <li>Перейдите в раздел "Финансы" → "Отчеты"</li>
-            <li>Выберите нужный период и сформируйте отчет</li>
-            <li>Скачайте отчет в формате CSV</li>
+            <li>Перейдите в раздел "Аналитика" → "Отчеты"</li>
+            <li>Перейдите в раздел "Заказы" → "Заказы со складов Ozon"</li>
+            <li>Выберите нужный период и скачайте отчет</li>
             <li>Загрузите файл в форму выше</li>
           </ol>
-          <div className="mt-3 text-xs text-yellow-600">
-            <strong>Примечание:</strong> Система автоматически определит
-            доставленные заказы по статусу "Доставлен" и сгруппирует товары по
-            наименованиям
-          </div>
+          <div className="mt-3 text-xs text-yellow-600"></div>
         </div>
       </div>
     </div>
