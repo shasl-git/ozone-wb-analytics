@@ -21,7 +21,7 @@ export default function OzonPage() {
     {
       title: "Информация по кластерам",
       description: "Анализ товарных кластеров и категорий",
-      path: "/ozon/clusters",
+      path: "/ozon/cluster-analysis",
       color: "bg-orange-500 hover:bg-orange-600",
     },
   ];
