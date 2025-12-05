@@ -614,7 +614,7 @@ export default function OzonSalesAnalysis() {
         </p>
 
         {/* Блок загрузки файла */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6 text-gray-800">
           <h2 className="text-xl font-semibold mb-4">Загрузка отчета</h2>
 
           <div

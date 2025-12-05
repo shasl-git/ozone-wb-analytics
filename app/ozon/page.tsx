@@ -60,7 +60,7 @@ export default function OzonPage() {
         </div>
 
         {/* Дополнительная информация */}
-        <div className="mt-12 bg-white rounded-lg shadow-md p-6">
+        <div className="mt-12 bg-white rounded-lg shadow-md p-6 text-gray-800">
           <h2 className="text-2xl font-semibold mb-4">О аналитике Ozon</h2>
           <p className="text-gray-600 mb-4">
             Специализированные инструменты для анализа маркетплейса Ozon,

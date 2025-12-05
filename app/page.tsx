@@ -41,7 +41,7 @@ export default function Home() {
         </div>
 
         {/* Дополнительная информация */}
-        <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
+        <div className="mt-16 grid grid-cols-1 md:grid-cols-3 text-gray-800 gap-6 text-left">
           <div className="bg-white p-6 rounded-lg shadow-md">
             <h3 className="font-semibold text-lg mb-2">📊 Юнит-экономика</h3>
             <p className="text-gray-600">

@@ -1,7 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+// Тип для результатов расчета логистики
+type LogisticsCalculation = {
+  liters: string;
+  index: number;
+  cost: string;
+  withReception: string;
+  total: string;
+};
 
 export default function OzonUnitEconomics() {
   const router = useRouter();
@@ -31,10 +40,15 @@ export default function OzonUnitEconomics() {
   // Состояния для расчета маржинальности
   const [marginData, setMarginData] = useState({
     sellingPrice: 0,
-    ozonRewardPercent: 0, // теперь это процент
-    acquiring: 0,
-    processing: 0,
+    ozonRewardPercent: 0,
     taxPercent: 0,
+  });
+
+  // Состояния для калькулятора логистики
+  const [logisticsData, setLogisticsData] = useState({
+    width: 0,
+    length: 0,
+    height: 0,
   });
 
   // Валидация полей
@@ -56,11 +70,59 @@ export default function OzonUnitEconomics() {
     costData.purchaseCost * costData.quantity + totalAdditionalCosts;
   const costPerItem = costData.quantity > 0 ? totalCost / costData.quantity : 0;
 
+  // Расчет логистики на основе литража
+  const calculateLogistics = (): LogisticsCalculation | null => {
+    if (
+      logisticsData.width <= 0 ||
+      logisticsData.length <= 0 ||
+      logisticsData.height <= 0
+    ) {
+      return null;
+    }
+
+    // Вычисляем литраж (объем в литрах)
+    const liters =
+      (logisticsData.width * logisticsData.length * logisticsData.height) /
+      1000;
+
+    // Определяем индекс по литражу
+    let index;
+    if (liters <= 1) {
+      index = 46.77;
+    } else if (liters <= 2) {
+      index = 56.94;
+    } else if (liters <= 3) {
+      index = 67.11;
+    } else {
+      index = 15.25;
+    }
+
+    // Расчет стоимости логистики
+    const logisticsCost = liters * index;
+    const logisticsWithReception = logisticsCost + 25; // +25 рублей за приемку
+    const totalLogistics = logisticsWithReception * 1.1; // +10%
+
+    return {
+      liters: liters.toFixed(2),
+      index,
+      cost: logisticsCost.toFixed(2),
+      withReception: logisticsWithReception.toFixed(2),
+      total: totalLogistics.toFixed(2),
+    };
+  };
+
+  const logisticsCalculation = calculateLogistics();
+  const logisticsCost = logisticsCalculation
+    ? parseFloat(logisticsCalculation.total)
+    : 0;
+
+  // Расчет эквайринга (1% от цены продажи)
+  const acquiringAmount = marginData.sellingPrice * 0.01;
+
   // Расчет маржинальности (обновлено)
   const ozonRewardAmount =
     (marginData.sellingPrice * marginData.ozonRewardPercent) / 100;
-  const totalExpenses =
-    ozonRewardAmount + marginData.acquiring + marginData.processing;
+  const totalExpenses = ozonRewardAmount + acquiringAmount + logisticsCost;
   const taxAmount = (marginData.sellingPrice * marginData.taxPercent) / 100;
   const fullCost = costPerItem + totalExpenses + taxAmount;
   const margin = marginData.sellingPrice - fullCost;
@@ -105,6 +167,21 @@ export default function OzonUnitEconomics() {
     setMarginData((prev) => ({ ...prev, [field]: numValue }));
     validateField(field, numValue);
   };
+
+  const handleLogisticsDataChange = (field: string, value: string) => {
+    const numValue = parseFloat(value) || 0;
+    setLogisticsData((prev) => ({ ...prev, [field]: numValue }));
+    validateField(field, numValue);
+  };
+
+  // Автоподстановка примерных курсов при загрузке
+  useEffect(() => {
+    // Примерные курсы (можно заменить на актуальные через API)
+    setExchangeRates({
+      usd: 92.5,
+      cny: 12.8,
+    });
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
@@ -406,6 +483,142 @@ export default function OzonUnitEconomics() {
           </div>
         </div>
 
+        {/* Калькулятор логистики */}
+        <div className="bg-white rounded-lg text-gray-700 shadow-md p-6 mb-6">
+          <h2 className="text-xl font-semibold mb-4">
+            Калькулятор логистики Ozon
+          </h2>
+          <p className="text-gray-600 mb-4">
+            Введите размеры упаковки в сантиметрах:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Ширина (см)
+                <span className="text-red-500 ml-1">*</span>
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={logisticsData.width || ""}
+                onChange={(e) =>
+                  handleLogisticsDataChange("width", e.target.value)
+                }
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  validationErrors.width ? "border-red-500" : "border-gray-300"
+                }`}
+                placeholder="Например: 20"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Длина (см)
+                <span className="text-red-500 ml-1">*</span>
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={logisticsData.length || ""}
+                onChange={(e) =>
+                  handleLogisticsDataChange("length", e.target.value)
+                }
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  validationErrors.length ? "border-red-500" : "border-gray-300"
+                }`}
+                placeholder="Например: 30"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Высота (см)
+                <span className="text-red-500 ml-1">*</span>
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={logisticsData.height || ""}
+                onChange={(e) =>
+                  handleLogisticsDataChange("height", e.target.value)
+                }
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  validationErrors.height ? "border-red-500" : "border-gray-300"
+                }`}
+                placeholder="Например: 10"
+              />
+            </div>
+          </div>
+
+          {/* Детали расчета логистики */}
+          {logisticsCalculation && (
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="font-semibold mb-2">Детали расчета логистики:</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span>Объем упаковки:</span>
+                    <span className="font-medium">
+                      {logisticsCalculation.liters} л
+                    </span>
+                  </div>
+                  <div className="flex justify-between mb-1">
+                    <span>Индекс (тариф):</span>
+                    <span className="font-medium">
+                      {logisticsCalculation.index} ₽/л
+                    </span>
+                  </div>
+                  <div className="flex justify-between mb-1">
+                    <span>Стоимость по тарифу:</span>
+                    <span className="font-medium">
+                      {logisticsCalculation.cost} ₽
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span>+ Приемка ПВЗ:</span>
+                    <span className="font-medium">25.00 ₽</span>
+                  </div>
+                  <div className="flex justify-between mb-1">
+                    <span>Итого с приемкой:</span>
+                    <span className="font-medium">
+                      {logisticsCalculation.withReception} ₽
+                    </span>
+                  </div>
+                  <div className="flex justify-between mb-1">
+                    <span>+ 10% (надбавка):</span>
+                    <span className="font-medium">
+                      {(
+                        parseFloat(logisticsCalculation.withReception) * 0.1
+                      ).toFixed(2)}{" "}
+                      ₽
+                    </span>
+                  </div>
+                  <div className="flex justify-between mt-2 pt-2 border-t border-gray-300">
+                    <span className="font-semibold">
+                      Общая стоимость логистики:
+                    </span>
+                    <span className="font-semibold text-blue-600">
+                      {logisticsCalculation.total} ₽
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Справочная информация по индексам */}
+          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+            <h4 className="font-medium mb-2">Тарифы Ozon по литражу:</h4>
+            <ul className="text-sm space-y-1">
+              <li>• до 1 литра включительно — 46,77 ₽ за литр</li>
+              <li>• от 1,001 до 2 литров включительно — 56,94 ₽ за литр</li>
+              <li>• от 2,001 до 3 литров включительно — 67,11 ₽ за литр</li>
+              <li>• от 3,001 до 190 литров включительно — 15,25 ₽ за литр</li>
+            </ul>
+          </div>
+        </div>
+
         {/* Расчет маржинальности */}
         <div className="bg-white text-gray-700 rounded-lg shadow-md p-6">
           <h2 className="text-xl font-semibold mb-4">
@@ -462,43 +675,11 @@ export default function OzonUnitEconomics() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Эквайринг (₽)
-                <span className="text-red-500 ml-1">*</span>
+                Эквайринг (автоматически 1%)
               </label>
-              <input
-                type="number"
-                step="0.01"
-                value={marginData.acquiring || ""}
-                onChange={(e) =>
-                  handleMarginDataChange("acquiring", e.target.value)
-                }
-                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  validationErrors.acquiring
-                    ? "border-red-500"
-                    : "border-gray-300"
-                }`}
-                placeholder="0"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Обработка + доставка + логистика (₽)
-                <span className="text-red-500 ml-1">*</span>
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={marginData.processing || ""}
-                onChange={(e) =>
-                  handleMarginDataChange("processing", e.target.value)
-                }
-                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  validationErrors.processing
-                    ? "border-red-500"
-                    : "border-gray-300"
-                }`}
-                placeholder="0"
-              />
+              <div className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50">
+                {acquiringAmount.toFixed(2)} ₽
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -562,18 +743,18 @@ export default function OzonUnitEconomics() {
                 </tr>
                 <tr>
                   <td className="border border-gray-300 p-3 font-medium">
-                    Эквайринг
+                    Эквайринг (1%)
                   </td>
                   <td className="border border-gray-300 p-3">
-                    {marginData.acquiring} ₽
+                    {acquiringAmount.toFixed(2)} ₽
                   </td>
                 </tr>
                 <tr>
                   <td className="border border-gray-300 p-3 font-medium">
-                    Обработка + доставка + логистика
+                    Приемка+Логистика
                   </td>
                   <td className="border border-gray-300 p-3">
-                    {marginData.processing} ₽
+                    {logisticsCost.toFixed(2)} ₽
                   </td>
                 </tr>
                 <tr className="bg-gray-50">
