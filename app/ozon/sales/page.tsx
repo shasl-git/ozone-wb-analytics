@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface ProductStats {
   name: string;
@@ -11,8 +11,12 @@ interface ProductStats {
 
 interface DailyProductStats {
   name: string;
-  count: number;
-  amount: number;
+  deliveredCount: number;
+  deliveredAmount: number;
+  cancelledCount: number;
+  cancelledAmount: number;
+  totalCount: number;
+  totalAmount: number;
 }
 
 interface DailyStats {
@@ -26,6 +30,15 @@ interface DailyStats {
   deliveredAmount: number;
   cancelledAmount: number;
   inTransitAmount: number;
+}
+
+interface ProductProfitData {
+  productName: string;
+  costPrice: number; // Себестоимость за единицу
+  logistics: number; // Логистика за единицу
+  ozonRewardPercent: number; // Вознаграждение Ozon в %
+  taxPercent: number; // НДС в %
+  totalProfit: number; // Общая прибыль за период
 }
 
 interface OzonReportData {
@@ -45,9 +58,127 @@ export default function OzonSalesAnalysis() {
   const [isLoading, setIsLoading] = useState(false);
   const [reportData, setReportData] = useState<OzonReportData | null>(null);
   const [fileName, setFileName] = useState("");
+  const [isFormulaExpanded, setIsFormulaExpanded] = useState(false);
 
-  // Добавляем новое состояние для отображения отчета по дням
+  // Состояния для отображения разделов
   const [showDailyReport, setShowDailyReport] = useState(false);
+  const [showProfitCalculation, setShowProfitCalculation] = useState(false);
+
+  // Состояние для хранения данных о прибыли для каждого товара
+  const [productProfitData, setProductProfitData] = useState<
+    ProductProfitData[]
+  >([]);
+
+  // Функция для инициализации данных о прибыли при загрузке отчета
+  useEffect(() => {
+    if (reportData && reportData.dailyStats.length > 0) {
+      // Собираем все уникальные названия товаров из dailyStats
+      const allProductNames = new Set<string>();
+      reportData.dailyStats.forEach((day) => {
+        day.products.forEach((product) => {
+          allProductNames.add(product.name);
+        });
+      });
+
+      // Создаем начальные данные для каждого товара
+      const initialProfitData: ProductProfitData[] = Array.from(
+        allProductNames
+      ).map((productName) => ({
+        productName,
+        costPrice: 0,
+        logistics: 0,
+        ozonRewardPercent: 20, // Значение по умолчанию 20%
+        taxPercent: 6, // Значение по умолчанию 6%
+        totalProfit: 0,
+      }));
+
+      // Обновляем состояние, сохраняя существующие значения для товаров, которые уже были настроены
+      setProductProfitData((prev) => {
+        const updatedData = [...initialProfitData];
+        prev.forEach((existingProduct) => {
+          const index = updatedData.findIndex(
+            (p) => p.productName === existingProduct.productName
+          );
+          if (index !== -1) {
+            updatedData[index] = { ...existingProduct, totalProfit: 0 };
+          }
+        });
+        return updatedData;
+      });
+    }
+  }, [reportData]);
+
+  // Функция для расчета прибыли для одного товара в одном дне
+  const calculateProfitForProduct = (
+    productName: string,
+    averagePrice: number
+  ) => {
+    const profitData = productProfitData.find(
+      (p) => p.productName === productName
+    );
+
+    if (!profitData || averagePrice <= 0) return 0;
+
+    const { costPrice, logistics, ozonRewardPercent, taxPercent } = profitData;
+
+    // Рассчитываем все составляющие
+    const ozonRewardAmount = (averagePrice * ozonRewardPercent) / 100;
+    const acquiringAmount = averagePrice / 100; // 1% эквайринг
+    const taxAmount = (averagePrice * taxPercent) / 100;
+
+    // Расчет прибыли по формуле:
+    // Средняя цена - Себестоимость - Логистика - Вознаграждение Ozon - Эквайринг - НДС
+    const profit =
+      averagePrice -
+      costPrice -
+      logistics -
+      ozonRewardAmount -
+      acquiringAmount -
+      taxAmount;
+
+    return Math.round(profit * 100) / 100; // Округляем до 2 знаков после запятой
+  };
+
+  // Функция для расчета общей прибыли по товару за все дни
+  const calculateTotalProfitForProduct = (productName: string) => {
+    if (!reportData || !productProfitData.length) return 0;
+
+    let totalProfit = 0;
+
+    reportData.dailyStats.forEach((day) => {
+      day.products.forEach((product) => {
+        if (product.name === productName && product.deliveredCount > 0) {
+          const averagePrice = product.deliveredAmount / product.deliveredCount;
+          const profitPerUnit = calculateProfitForProduct(
+            productName,
+            averagePrice
+          );
+          totalProfit += profitPerUnit * product.deliveredCount;
+        }
+      });
+    });
+
+    return Math.round(totalProfit * 100) / 100;
+  };
+
+  // Обновляем общую прибыль при изменении данных
+  useEffect(() => {
+    if (productProfitData.length > 0) {
+      const updatedData = productProfitData.map((product) => ({
+        ...product,
+        totalProfit: calculateTotalProfitForProduct(product.productName),
+      }));
+      setProductProfitData(updatedData);
+    }
+  }, [
+    reportData,
+    productProfitData
+      .map(
+        (p) =>
+          `${p.productName}-${p.costPrice}-${p.logistics}-${p.ozonRewardPercent}-${p.taxPercent}`
+      )
+      .join(","),
+  ]);
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -130,11 +261,22 @@ export default function OzonSalesAnalysis() {
     let deliveredCount = 0;
     let deliveredAmount = 0;
 
+    // Новые переменные для отмененных заказов и заказов в пути
+    let cancelledCount = 0;
+    let cancelledAmount = 0;
+    let inTransitCount = 0;
+    let inTransitAmount = 0;
+
     // Объект для группировки по товарам (общий)
     const productsMap: { [key: string]: ProductStats } = {};
 
     // Объект для группировки по дням
     const dailyStatsMap: { [key: string]: DailyStats } = {};
+
+    // Объект для детализации по товарам по дням
+    const dailyProductsMap: {
+      [key: string]: { [productName: string]: DailyProductStats };
+    } = {};
 
     // Массив для хранения всех дат
     const allDates: Date[] = [];
@@ -206,6 +348,11 @@ export default function OzonSalesAnalysis() {
           };
         }
 
+        // Инициализируем карту товаров для дня, если еще не инициализирована
+        if (dateStr && !dailyProductsMap[dateStr]) {
+          dailyProductsMap[dateStr] = {};
+        }
+
         // Все заказы
         ordersCount += quantity;
         totalAmount += amount;
@@ -240,39 +387,77 @@ export default function OzonSalesAnalysis() {
           }
           productsMap[productName].deliveredCount += quantity;
           productsMap[productName].deliveredAmount += amount;
+
+          // Добавляем в детализацию по товарам для дня
+          if (dateStr) {
+            if (!dailyProductsMap[dateStr][productName]) {
+              dailyProductsMap[dateStr][productName] = {
+                name: productName,
+                deliveredCount: 0,
+                deliveredAmount: 0,
+                cancelledCount: 0,
+                cancelledAmount: 0,
+                totalCount: 0,
+                totalAmount: 0,
+              };
+            }
+            dailyProductsMap[dateStr][productName].deliveredCount += quantity;
+            dailyProductsMap[dateStr][productName].deliveredAmount += amount;
+            dailyProductsMap[dateStr][productName].totalCount += quantity;
+            dailyProductsMap[dateStr][productName].totalAmount += amount;
+          }
         }
 
         // Отмененные заказы
-        if (isCancelled && dateStr) {
-          dailyStatsMap[dateStr].cancelledCount += quantity;
-          dailyStatsMap[dateStr].cancelledAmount += amount;
+        if (isCancelled) {
+          cancelledCount += quantity;
+          cancelledAmount += amount;
+
+          if (dateStr) {
+            dailyStatsMap[dateStr].cancelledCount += quantity;
+            dailyStatsMap[dateStr].cancelledAmount += amount;
+
+            // Добавляем в детализацию по товарам для дня
+            if (!dailyProductsMap[dateStr][productName]) {
+              dailyProductsMap[dateStr][productName] = {
+                name: productName,
+                deliveredCount: 0,
+                deliveredAmount: 0,
+                cancelledCount: 0,
+                cancelledAmount: 0,
+                totalCount: 0,
+                totalAmount: 0,
+              };
+            }
+            dailyProductsMap[dateStr][productName].cancelledCount += quantity;
+            dailyProductsMap[dateStr][productName].cancelledAmount += amount;
+            dailyProductsMap[dateStr][productName].totalCount += quantity;
+            dailyProductsMap[dateStr][productName].totalAmount += amount;
+          }
         }
 
         // Заказы в пути
-        if (isInTransit && dateStr) {
-          dailyStatsMap[dateStr].inTransitCount += quantity;
-          dailyStatsMap[dateStr].inTransitAmount += amount;
-        }
+        if (isInTransit) {
+          inTransitCount += quantity;
+          inTransitAmount += amount;
 
-        // Добавляем товар в статистику по дням
-        if (dateStr) {
-          // Проверяем, есть ли уже такой товар в статистике дня
-          const existingProduct = dailyStatsMap[dateStr].products.find(
-            (p: DailyProductStats) => p.name === productName
-          );
+          if (dateStr) {
+            dailyStatsMap[dateStr].inTransitCount += quantity;
+            dailyStatsMap[dateStr].inTransitAmount += amount;
 
-          if (existingProduct) {
-            existingProduct.count += quantity;
-            existingProduct.amount += amount;
-          } else {
-            dailyStatsMap[dateStr].products.push({
-              name: productName,
-              count: quantity,
-              amount: amount,
-            });
+            // Для товаров в пути не добавляем в детализацию по товарам
+            // так как они еще не имеют финального статуса
           }
         }
       }
+    }
+
+    // После обработки всех строк, преобразуем dailyProductsMap в массивы для каждого дня
+    for (const dateStr in dailyProductsMap) {
+      const productsArray = Object.values(dailyProductsMap[dateStr]);
+      dailyStatsMap[dateStr].products = productsArray.sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
     }
 
     // Определяем период отчета
@@ -335,6 +520,23 @@ export default function OzonSalesAnalysis() {
     fileInputRef.current?.click();
   };
 
+  // Обработчики для данных о прибыли
+  const handleProfitDataChange = (
+    productName: string,
+    field: keyof ProductProfitData,
+    value: string
+  ) => {
+    const numValue = parseFloat(value) || 0;
+
+    setProductProfitData((prev) =>
+      prev.map((product) =>
+        product.productName === productName
+          ? { ...product, [field]: numValue }
+          : product
+      )
+    );
+  };
+
   // Расчет дополнительных показателей
   const averageOrderValue =
     reportData && reportData.ordersCount > 0
@@ -350,6 +552,48 @@ export default function OzonSalesAnalysis() {
     reportData && reportData.ordersCount > 0
       ? Math.round((reportData.deliveredCount / reportData.ordersCount) * 100)
       : 0;
+
+  // Расчет отмененных заказов и заказов в пути из dailyStats
+  const cancelledData = reportData
+    ? reportData.dailyStats.reduce(
+        (acc, day) => ({
+          count: acc.count + day.cancelledCount,
+          amount: acc.amount + day.cancelledAmount,
+        }),
+        { count: 0, amount: 0 }
+      )
+    : { count: 0, amount: 0 };
+
+  const inTransitData = reportData
+    ? reportData.dailyStats.reduce(
+        (acc, day) => ({
+          count: acc.count + day.inTransitCount,
+          amount: acc.amount + day.inTransitAmount,
+        }),
+        { count: 0, amount: 0 }
+      )
+    : { count: 0, amount: 0 };
+
+  // Расчет общей прибыли за период
+  const totalProfitForPeriod = productProfitData.reduce(
+    (total, product) => total + product.totalProfit,
+    0
+  );
+
+  // Функция для скролла к верху
+  const scrollToTop = () => {
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  };
+  // Функция для скролла к низу
+  const scrollToBottom = () => {
+    window.scrollTo({
+      top: document.documentElement.scrollHeight,
+      behavior: "smooth",
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
@@ -519,6 +763,76 @@ export default function OzonSalesAnalysis() {
                   Доставленные и выкупленные товары
                 </p>
               </div>
+
+              {/* Отмененные заказы */}
+              <div className="bg-red-50 rounded-lg p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                      Отмененные заказы
+                    </h3>
+                    <p className="text-3xl font-bold text-red-600">
+                      {cancelledData.count.toLocaleString()} шт
+                    </p>
+                    <p className="text-lg text-red-500 mt-1">
+                      {cancelledData.amount.toLocaleString()} ₽
+                    </p>
+                  </div>
+                  <div className="text-red-500 bg-red-100 p-3 rounded-full">
+                    <svg
+                      className="w-8 h-8"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-600 mt-2">
+                  Отмененные заказы за период
+                </p>
+              </div>
+
+              {/* Заказы в пути */}
+              <div className="bg-yellow-50 rounded-lg p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                      Заказы в пути
+                    </h3>
+                    <p className="text-3xl font-bold text-yellow-600">
+                      {inTransitData.count.toLocaleString()} шт
+                    </p>
+                    <p className="text-lg text-yellow-500 mt-1">
+                      {inTransitData.amount.toLocaleString()} ₽
+                    </p>
+                  </div>
+                  <div className="text-yellow-500 bg-yellow-100 p-3 rounded-full">
+                    <svg
+                      className="w-8 h-8"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M17 8l4 4m0 0l-4 4m4-4H3"
+                      />
+                    </svg>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-600 mt-2">
+                  Заказы, которые еще доставляются
+                </p>
+              </div>
             </div>
 
             {/* Дополнительная статистика */}
@@ -601,51 +915,6 @@ export default function OzonSalesAnalysis() {
                     </tbody>
                   </table>
                 </div>
-
-                {/* Сводка по товарам */}
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="bg-blue-50 rounded-lg p-4 text-center">
-                    <div className="text-lg font-bold text-blue-600">
-                      {reportData.products.length}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      Всего товаров с выкупами
-                    </div>
-                  </div>
-
-                  <div className="bg-green-50 rounded-lg p-4 text-center">
-                    <div className="text-lg font-bold text-green-600">
-                      {reportData.products
-                        .reduce(
-                          (max, product) =>
-                            product.deliveredCount > max
-                              ? product.deliveredCount
-                              : max,
-                          0
-                        )
-                        .toLocaleString()}{" "}
-                      шт
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      Максимум выкупов у одного товара
-                    </div>
-                  </div>
-
-                  <div className="bg-purple-50 rounded-lg p-4 text-center">
-                    <div className="text-lg font-bold text-purple-600">
-                      {reportData.products
-                        .reduce(
-                          (total, product) => total + product.deliveredCount,
-                          0
-                        )
-                        .toLocaleString()}{" "}
-                      шт
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      Общее количество выкупов
-                    </div>
-                  </div>
-                </div>
               </div>
             )}
 
@@ -664,6 +933,14 @@ export default function OzonSalesAnalysis() {
                   {reportData.deliveredCount.toLocaleString()} шт
                 </div>
                 <div>
+                  <span className="font-medium">Отмененные заказы:</span>{" "}
+                  {cancelledData.count.toLocaleString()} шт
+                </div>
+                <div>
+                  <span className="font-medium">Заказы в пути:</span>{" "}
+                  {inTransitData.count.toLocaleString()} шт
+                </div>
+                <div>
                   <span className="font-medium">Общая сумма:</span>{" "}
                   {reportData.totalAmount.toLocaleString()} ₽
                 </div>
@@ -672,13 +949,27 @@ export default function OzonSalesAnalysis() {
                   {reportData.deliveredAmount.toLocaleString()} ₽
                 </div>
                 <div>
+                  <span className="font-medium">Сумма отмен:</span>{" "}
+                  {cancelledData.amount.toLocaleString()} ₽
+                </div>
+                <div>
+                  <span className="font-medium">Сумма в пути:</span>{" "}
+                  {inTransitData.amount.toLocaleString()} ₽
+                </div>
+                <div>
                   <span className="font-medium">Процент выкупа:</span>{" "}
                   {deliveryRate}%
                 </div>
-                <div>
-                  <span className="font-medium">Товаров с выкупами:</span>{" "}
-                  {reportData.products.length} шт
-                </div>
+                {showProfitCalculation && (
+                  <div className="md:col-span-2">
+                    <span className="font-medium">
+                      Общая прибыль за период:
+                    </span>{" "}
+                    <span className="font-bold text-emerald-600">
+                      {totalProfitForPeriod.toFixed(2)} ₽
+                    </span>
+                  </div>
+                )}
                 {reportData.periodStart && reportData.periodEnd && (
                   <>
                     <div>
@@ -694,12 +985,12 @@ export default function OzonSalesAnalysis() {
               </div>
             </div>
 
-            {/* Кнопка для показа отчета по дням */}
+            {/* Кнопки для показа отчета по дням и расчета прибыли */}
             {reportData.dailyStats.length > 0 && (
-              <div className="mt-6 text-center">
+              <div className="mt-6 flex flex-col md:flex-row gap-4 justify-center">
                 <button
                   onClick={() => setShowDailyReport(!showDailyReport)}
-                  className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-3 rounded-lg transition-colors font-semibold flex items-center justify-center mx-auto"
+                  className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-3 rounded-lg transition-colors font-semibold flex items-center justify-center"
                 >
                   {showDailyReport
                     ? "Скрыть отчет по дням"
@@ -720,12 +1011,483 @@ export default function OzonSalesAnalysis() {
                     />
                   </svg>
                 </button>
+
+                <button
+                  onClick={() =>
+                    setShowProfitCalculation(!showProfitCalculation)
+                  }
+                  className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white px-6 py-3 rounded-lg transition-all duration-300 font-semibold flex items-center justify-center shadow-md hover:shadow-lg"
+                >
+                  {showProfitCalculation
+                    ? "Скрыть расчет прибыли"
+                    : "Расчет прибыли"}
+                  <svg
+                    className={`w-5 h-5 ml-2 transition-transform ${
+                      showProfitCalculation ? "rotate-180" : ""
+                    }`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            {/* Раздел "Расчет прибыли" */}
+            {showProfitCalculation && productProfitData.length > 0 && (
+              <div className="mt-6 bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg p-6 border border-emerald-200">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
+                  <div>
+                    <h3 className="text-2xl font-bold text-emerald-800">
+                      Расчет прибыли по товарам
+                    </h3>
+                    <p className="text-emerald-600 mt-2">
+                      Заполните данные для расчета чистой прибыли по каждому
+                      товару за весь период
+                    </p>
+                  </div>
+                  <div className="mt-4 md:mt-0">
+                    <div className="bg-emerald-100 border border-emerald-300 rounded-lg px-4 py-2">
+                      <div className="text-sm text-emerald-700 font-medium">
+                        Общая прибыль за период:
+                      </div>
+                      <div className="text-xl font-bold text-emerald-800">
+                        {totalProfitForPeriod.toFixed(2)} ₽
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden mb-6">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="bg-gradient-to-r from-emerald-50 to-teal-50">
+                          <th className="p-4 text-left font-semibold text-emerald-800 border-b">
+                            Товар
+                          </th>
+                          <th className="p-4 text-left font-semibold text-emerald-800 border-b">
+                            Себестоимость
+                            <div className="text-xs font-normal text-emerald-600">
+                              ₽ за ед.
+                            </div>
+                          </th>
+                          <th className="p-4 text-left font-semibold text-emerald-800 border-b">
+                            Логистика Ozon
+                            <div className="text-xs font-normal text-emerald-600">
+                              ₽ за ед.
+                            </div>
+                          </th>
+                          <th className="p-4 text-left font-semibold text-emerald-800 border-b">
+                            Вознаграждение Ozon
+                            <div className="text-xs font-normal text-emerald-600">
+                              %
+                            </div>
+                          </th>
+                          <th className="p-4 text-left font-semibold text-emerald-800 border-b">
+                            НДС
+                            <div className="text-xs font-normal text-emerald-600">
+                              %
+                            </div>
+                          </th>
+                          <th className="p-4 text-left font-semibold text-emerald-800 border-b bg-emerald-100">
+                            Прибыль товара
+                            <div className="text-xs font-normal text-emerald-600">
+                              за весь период
+                            </div>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {productProfitData.map((product, index) => (
+                          <tr
+                            key={index}
+                            className={`hover:bg-emerald-50 transition-colors ${
+                              index % 2 === 0 ? "bg-white" : "bg-emerald-50/30"
+                            }`}
+                          >
+                            <td className="p-4 font-medium text-gray-800 border-b">
+                              {product.productName}
+                            </td>
+                            <td className="p-4 border-b">
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={product.costPrice || ""}
+                                  onChange={(e) =>
+                                    handleProfitDataChange(
+                                      product.productName,
+                                      "costPrice",
+                                      e.target.value
+                                    )
+                                  }
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all"
+                                  placeholder="0.00"
+                                />
+                                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                                  ₽
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-4 border-b">
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={product.logistics || ""}
+                                  onChange={(e) =>
+                                    handleProfitDataChange(
+                                      product.productName,
+                                      "logistics",
+                                      e.target.value
+                                    )
+                                  }
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all"
+                                  placeholder="0.00"
+                                />
+                                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                                  ₽
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-4 border-b">
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={product.ozonRewardPercent || ""}
+                                  onChange={(e) =>
+                                    handleProfitDataChange(
+                                      product.productName,
+                                      "ozonRewardPercent",
+                                      e.target.value
+                                    )
+                                  }
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all"
+                                  placeholder="20"
+                                />
+                                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                                  %
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-4 border-b">
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={product.taxPercent || ""}
+                                  onChange={(e) =>
+                                    handleProfitDataChange(
+                                      product.productName,
+                                      "taxPercent",
+                                      e.target.value
+                                    )
+                                  }
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all"
+                                  placeholder="6"
+                                />
+                                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                                  %
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-4 border-b bg-emerald-50">
+                              <div
+                                className={`text-center font-bold text-lg px-3 py-2 rounded ${
+                                  product.totalProfit > 0
+                                    ? "text-emerald-700 bg-emerald-100"
+                                    : product.totalProfit < 0
+                                    ? "text-red-700 bg-red-100"
+                                    : "text-gray-700 bg-gray-100"
+                                }`}
+                              >
+                                {product.totalProfit.toFixed(2)} ₽
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-bold text-emerald-800 text-lg flex items-center">
+                      <svg
+                        className="w-5 h-5 mr-2"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      Формула расчета прибыли на единицу товара:
+                    </h4>
+                    <button
+                      onClick={() => setIsFormulaExpanded(!isFormulaExpanded)}
+                      className="text-emerald-600 hover:text-emerald-800 font-medium text-xl flex items-center"
+                    >
+                      {isFormulaExpanded ? "Свернуть" : "Расскрыть"}
+                      <svg
+                        className={`w-4 h-4 ml-1 transition-transform ${
+                          isFormulaExpanded ? "rotate-180" : ""
+                        }`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 9l-7 7-7-7"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {isFormulaExpanded && (
+                    <div className="bg-gradient-to-br from-white to-emerald-50 rounded-xl p-5 border border-emerald-200 shadow-sm hover:shadow-md transition-shadow duration-300">
+                      <div className="flex items-start mb-4">
+                        <div className="bg-emerald-100 p-2 rounded-lg mr-3">
+                          <svg
+                            className="w-5 h-5 text-emerald-600"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                            />
+                          </svg>
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-emerald-800 text-lg">
+                            Формула расчета прибыли
+                          </h4>
+                          <p className="text-emerald-600 text-sm">
+                            Подробная расшифровка каждого компонента
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-white rounded-lg border border-emerald-100 p-4 mb-4">
+                        <div className="font-mono text-sm text-gray-800 space-y-1">
+                          <div className="flex items-center">
+                            <span className="text-emerald-700 font-bold mr-2">
+                              Прибыль =
+                            </span>
+                            <div className="flex flex-wrap gap-2">
+                              <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-medium border border-blue-200">
+                                Средняя цена
+                              </span>
+                              <span className="text-gray-400 mx-1">−</span>
+                              <span className="bg-red-50 text-red-700 px-2 py-1 rounded text-xs font-medium border border-red-200">
+                                Себестоимость
+                              </span>
+                              <span className="text-gray-400 mx-1">−</span>
+                              <span className="bg-yellow-50 text-yellow-700 px-2 py-1 rounded text-xs font-medium border border-yellow-200">
+                                Логистика Ozon
+                              </span>
+                              <span className="text-gray-400 mx-1">−</span>
+                              <span className="bg-purple-50 text-purple-700 px-2 py-1 rounded text-xs font-medium border border-purple-200">
+                                Вознаграждение Ozon
+                              </span>
+                              <span className="text-gray-400 mx-1">−</span>
+                              <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs font-medium border border-indigo-200">
+                                Эквайринг
+                              </span>
+                              <span className="text-gray-400 mx-1">−</span>
+                              <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded text-xs font-medium border border-rose-200">
+                                НДС
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="flex items-start group hover:bg-emerald-50 p-2 rounded-lg transition-colors cursor-help">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full mt-1.5 mr-3 flex-shrink-0"></div>
+                          <div>
+                            <div className="flex items-center">
+                              <span className="font-medium text-gray-800 text-sm">
+                                Средняя цена
+                              </span>
+                              <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                Расчет
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Среднее арифметическое стоимости доставленных
+                              товаров за день
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start group hover:bg-emerald-50 p-2 rounded-lg transition-colors cursor-help">
+                          <div className="w-2 h-2 bg-red-500 rounded-full mt-1.5 mr-3 flex-shrink-0"></div>
+                          <div>
+                            <div className="flex items-center">
+                              <span className="font-medium text-gray-800 text-sm">
+                                Себестоимость
+                              </span>
+                              <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                Затраты
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Затраты на товар, его доставку до склада и
+                              упаковку
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start group hover:bg-emerald-50 p-2 rounded-lg transition-colors cursor-help">
+                          <div className="w-2 h-2 bg-yellow-500 rounded-full mt-1.5 mr-3 flex-shrink-0"></div>
+                          <div>
+                            <div className="flex items-center">
+                              <span className="font-medium text-gray-800 text-sm">
+                                Логистика Ozon
+                              </span>
+                              <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                Ozon
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Комиссия Ozon за доставку товара до покупателя.
+                              Можно найти в личном кабинете Ozon
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start group hover:bg-emerald-50 p-2 rounded-lg transition-colors cursor-help">
+                          <div className="w-2 h-2 bg-purple-500 rounded-full mt-1.5 mr-3 flex-shrink-0"></div>
+                          <div>
+                            <div className="flex items-center">
+                              <span className="font-medium text-gray-800 text-sm">
+                                Вознаграждение Ozon
+                              </span>
+                              <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                Ozon
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Комиссия Ozon за продажу товара. Указывается в
+                              процентах от цены товара
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start group hover:bg-emerald-50 p-2 rounded-lg transition-colors cursor-help">
+                          <div className="w-2 h-2 bg-indigo-500 rounded-full mt-1.5 mr-3 flex-shrink-0"></div>
+                          <div>
+                            <div className="flex items-center">
+                              <span className="font-medium text-gray-800 text-sm">
+                                Эквайринг
+                              </span>
+                              <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                Банк
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Комиссия банка за обработку платежей.
+                              Фиксированная ставка 1% от стоимости товара
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start group hover:bg-emerald-50 p-2 rounded-lg transition-colors cursor-help">
+                          <div className="w-2 h-2 bg-rose-500 rounded-full mt-1.5 mr-3 flex-shrink-0"></div>
+                          <div>
+                            <div className="flex items-center">
+                              <span className="font-medium text-gray-800 text-sm">
+                                НДС
+                              </span>
+                              <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                Налог
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Налог на добавленную стоимость. Указывается в
+                              процентах от стоимости товара
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
             {/* Отчет по дням */}
             {showDailyReport && reportData.dailyStats.length > 0 && (
-              <div className="mt-6 bg-white rounded-lg shadow-md p-6">
+              <div className="mt-6 bg-white rounded-lg shadow-md p-6 relative">
+                {/* Кнопка "Наверх" */}
+
+                {/* Chevron style двойные стрелки */}
+                <button
+                  onClick={() => {
+                    const scrollPosition = window.pageYOffset;
+                    const windowHeight = window.innerHeight;
+                    const documentHeight =
+                      document.documentElement.scrollHeight;
+
+                    // Если мы ближе к верху - скроллим вниз, если ближе к низу - наверх
+                    if (scrollPosition < documentHeight / 2) {
+                      scrollToBottom();
+                    } else {
+                      scrollToTop();
+                    }
+                  }}
+                  className="fixed bottom-8 right-8 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white p-4 rounded-full shadow-xl hover:shadow-2xl transition-all duration-300 z-10 group"
+                  title="Переключить скролл"
+                >
+                  <div className="relative w-6 h-6">
+                    <svg
+                      className="w-6 h-6 transform transition-transform duration-300 group-hover:scale-120"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      {/* Верхняя стрелка Chevron */}
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2.5}
+                        d="M5 8l7-7 7 7"
+                      />
+                      {/* Нижняя стрелка Chevron */}
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2.5}
+                        d="M5 16l7 7 7-7"
+                      />
+                    </svg>
+                    <div className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  </div>
+                </button>
+
                 <h3 className="text-2xl font-semibold mb-6 text-center">
                   Отчет по дням
                 </h3>
@@ -734,7 +1496,7 @@ export default function OzonSalesAnalysis() {
                   (day: DailyStats, dayIndex: number) => (
                     <div key={dayIndex} className="mb-8 last:mb-0">
                       {/* Заголовок дня */}
-                      <div className="bg-gray-800 text-white rounded-t-lg p-4">
+                      <div className="bg-gradient-to-r from-gray-800 to-gray-900 text-white rounded-t-lg p-4">
                         <h4 className="text-xl font-semibold">
                           Дата: {day.date}
                         </h4>
@@ -744,7 +1506,7 @@ export default function OzonSalesAnalysis() {
                       <div className="border border-gray-300 border-t-0 rounded-b-lg p-4">
                         {/* Сводка по статусам */}
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                          <div className="bg-blue-50 rounded-lg p-4">
+                          <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
                             <div className="text-lg font-bold text-blue-600">
                               {day.orderedCount} шт
                             </div>
@@ -756,7 +1518,7 @@ export default function OzonSalesAnalysis() {
                             </div>
                           </div>
 
-                          <div className="bg-green-50 rounded-lg p-4">
+                          <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200">
                             <div className="text-lg font-bold text-green-600">
                               {day.deliveredCount} шт
                             </div>
@@ -768,7 +1530,7 @@ export default function OzonSalesAnalysis() {
                             </div>
                           </div>
 
-                          <div className="bg-red-50 rounded-lg p-4">
+                          <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 border border-red-200">
                             <div className="text-lg font-bold text-red-600">
                               {day.cancelledCount} шт
                             </div>
@@ -780,7 +1542,7 @@ export default function OzonSalesAnalysis() {
                             </div>
                           </div>
 
-                          <div className="bg-yellow-50 rounded-lg p-4">
+                          <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-lg p-4 border border-yellow-200">
                             <div className="text-lg font-bold text-yellow-600">
                               {day.inTransitCount} шт
                             </div>
@@ -800,19 +1562,27 @@ export default function OzonSalesAnalysis() {
                             <div className="overflow-x-auto">
                               <table className="w-full border-collapse border border-gray-300">
                                 <thead>
-                                  <tr className="bg-gray-100">
-                                    <th className="border border-gray-300 p-2 text-left">
+                                  <tr className="bg-gradient-to-r from-gray-100 to-gray-200">
+                                    <th className="border border-gray-300 p-3 text-left font-semibold">
                                       Товар
                                     </th>
-                                    <th className="border border-gray-300 p-2 text-left">
-                                      Количество
+                                    <th className="border border-gray-300 p-3 text-left font-semibold">
+                                      Доставлено
                                     </th>
-                                    <th className="border border-gray-300 p-2 text-left">
-                                      Сумма
+                                    <th className="border border-gray-300 p-3 text-left font-semibold">
+                                      Сумма (доставлено)
                                     </th>
-                                    <th className="border border-gray-300 p-2 text-left">
+                                    <th className="border border-gray-300 p-3 text-left font-semibold">
+                                      Отменено
+                                    </th>
+                                    <th className="border border-gray-300 p-3 text-left font-semibold">
                                       Средняя цена
                                     </th>
+                                    {showProfitCalculation && (
+                                      <th className="border border-gray-300 p-3 text-left font-semibold bg-gradient-to-r from-emerald-100 to-teal-100">
+                                        Прибыль
+                                      </th>
+                                    )}
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -820,68 +1590,135 @@ export default function OzonSalesAnalysis() {
                                     (
                                       product: DailyProductStats,
                                       productIndex: number
-                                    ) => (
-                                      <tr
-                                        key={productIndex}
-                                        className={
-                                          productIndex % 2 === 0
-                                            ? "bg-white"
-                                            : "bg-gray-50"
-                                        }
-                                      >
-                                        <td className="border border-gray-300 p-2 font-medium">
-                                          {product.name}
-                                        </td>
-                                        <td className="border border-gray-300 p-2">
-                                          {product.count} шт
-                                        </td>
-                                        <td className="border border-gray-300 p-2">
-                                          {product.amount.toLocaleString()} ₽
-                                        </td>
-                                        <td className="border border-gray-300 p-2">
-                                          {Math.round(
-                                            product.amount / product.count
-                                          ).toLocaleString()}{" "}
-                                          ₽
-                                        </td>
-                                      </tr>
-                                    )
+                                    ) => {
+                                      const averagePrice =
+                                        product.deliveredCount > 0
+                                          ? product.deliveredAmount /
+                                            product.deliveredCount
+                                          : 0;
+                                      const profitPerUnit =
+                                        calculateProfitForProduct(
+                                          product.name,
+                                          averagePrice
+                                        );
+                                      const totalProfit =
+                                        profitPerUnit * product.deliveredCount;
+                                      const profitColor =
+                                        profitPerUnit > 0
+                                          ? "text-emerald-700"
+                                          : profitPerUnit < 0
+                                          ? "text-red-700"
+                                          : "text-gray-700";
+
+                                      return (
+                                        <tr
+                                          key={productIndex}
+                                          className={
+                                            productIndex % 2 === 0
+                                              ? "bg-white"
+                                              : "bg-gray-50"
+                                          }
+                                        >
+                                          <td className="border border-gray-300 p-3 font-medium">
+                                            {product.name}
+                                          </td>
+                                          <td className="border border-gray-300 p-3 text-center">
+                                            {product.deliveredCount} шт
+                                          </td>
+                                          <td className="border border-gray-300 p-3 text-center">
+                                            {product.deliveredAmount.toLocaleString()}{" "}
+                                            ₽
+                                          </td>
+                                          <td className="border border-gray-300 p-3 text-center">
+                                            {product.cancelledCount} шт
+                                          </td>
+                                          <td className="border border-gray-300 p-3 text-center">
+                                            {averagePrice > 0
+                                              ? Math.round(
+                                                  averagePrice
+                                                ).toLocaleString()
+                                              : 0}{" "}
+                                            ₽
+                                          </td>
+                                          {showProfitCalculation && (
+                                            <td className="border border-gray-300 p-3 text-center bg-emerald-50">
+                                              <div className="flex flex-col items-center">
+                                                <div
+                                                  className={`font-bold text-lg ${profitColor} mb-1`}
+                                                >
+                                                  {profitPerUnit.toFixed(2)} ₽
+                                                </div>
+                                                {product.deliveredCount > 0 && (
+                                                  <>
+                                                    <div className="text-xs text-gray-500 mb-1">
+                                                      за единицу
+                                                    </div>
+                                                    <div className="text-sm font-semibold text-emerald-800 bg-emerald-100 px-2 py-1 rounded">
+                                                      Итого:{" "}
+                                                      {totalProfit.toFixed(2)} ₽
+                                                    </div>
+                                                  </>
+                                                )}
+                                              </div>
+                                            </td>
+                                          )}
+                                        </tr>
+                                      );
+                                    }
                                   )}
                                 </tbody>
                               </table>
                             </div>
+                          </div>
+                        )}
 
-                            {/* Сводка по товарам за день */}
-                            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                              <div className="bg-gray-50 p-3 rounded">
-                                <span className="font-medium">
-                                  Всего товаров:
-                                </span>{" "}
-                                {day.products.length}
-                              </div>
-                              <div className="bg-gray-50 p-3 rounded">
-                                <span className="font-medium">
-                                  Общее количество:
-                                </span>{" "}
-                                {day.products.reduce(
-                                  (sum: number, p: DailyProductStats) =>
-                                    sum + p.count,
-                                  0
-                                )}{" "}
-                                шт
-                              </div>
-                              <div className="bg-gray-50 p-3 rounded">
-                                <span className="font-medium">
-                                  Общая сумма:
-                                </span>{" "}
-                                {day.products
-                                  .reduce(
-                                    (sum: number, p: DailyProductStats) =>
-                                      sum + p.amount,
-                                    0
-                                  )
-                                  .toLocaleString()}{" "}
-                                ₽
+                        {/* Расчет прибыли за день */}
+                        {showProfitCalculation && (
+                          <div className="mt-6 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg">
+                            <h5 className="font-semibold text-emerald-800 mb-3 flex items-center">
+                              <svg
+                                className="w-5 h-5 mr-2"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                                />
+                              </svg>
+                              Прибыль за день:
+                            </h5>
+                            <div className="flex justify-center">
+                              <div className="bg-white border border-emerald-300 rounded-lg p-4 shadow-sm">
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-emerald-700">
+                                    {day.products
+                                      .reduce((total, product) => {
+                                        const averagePrice =
+                                          product.deliveredCount > 0
+                                            ? product.deliveredAmount /
+                                              product.deliveredCount
+                                            : 0;
+                                        const profitPerUnit =
+                                          calculateProfitForProduct(
+                                            product.name,
+                                            averagePrice
+                                          );
+                                        return (
+                                          total +
+                                          profitPerUnit * product.deliveredCount
+                                        );
+                                      }, 0)
+                                      .toFixed(2)}{" "}
+                                    ₽
+                                  </div>
+                                  <div className="text-sm text-gray-600 mt-1">
+                                    Общая прибыль за {day.date}
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -964,12 +1801,12 @@ export default function OzonSalesAnalysis() {
                 )}
 
                 {/* Сводка по всем дням */}
-                <div className="mt-8 p-4 bg-gray-50 rounded-lg">
-                  <h5 className="font-semibold text-gray-800 mb-3">
+                <div className="mt-8 p-6 bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl border border-gray-300">
+                  <h5 className="font-semibold text-gray-800 mb-4 text-lg">
                     Сводка по всем дням:
                   </h5>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div className="text-center">
+                    <div className="text-center bg-white p-4 rounded-lg border border-blue-200">
                       <div className="text-lg font-bold text-blue-600">
                         {reportData.dailyStats
                           .reduce(
@@ -985,7 +1822,7 @@ export default function OzonSalesAnalysis() {
                       </div>
                     </div>
 
-                    <div className="text-center">
+                    <div className="text-center bg-white p-4 rounded-lg border border-green-200">
                       <div className="text-lg font-bold text-green-600">
                         {reportData.dailyStats
                           .reduce(
@@ -1001,7 +1838,7 @@ export default function OzonSalesAnalysis() {
                       </div>
                     </div>
 
-                    <div className="text-center">
+                    <div className="text-center bg-white p-4 rounded-lg border border-red-200">
                       <div className="text-lg font-bold text-red-600">
                         {reportData.dailyStats
                           .reduce(
@@ -1017,7 +1854,7 @@ export default function OzonSalesAnalysis() {
                       </div>
                     </div>
 
-                    <div className="text-center">
+                    <div className="text-center bg-white p-4 rounded-lg border border-yellow-200">
                       <div className="text-lg font-bold text-yellow-600">
                         {reportData.dailyStats
                           .reduce(
@@ -1031,6 +1868,57 @@ export default function OzonSalesAnalysis() {
                       <div className="text-sm text-gray-600">Всего в пути</div>
                     </div>
                   </div>
+
+                  {/* Общая прибыль за весь период */}
+                  {showProfitCalculation && (
+                    <div className="mt-6 p-6 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-xl">
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <h5 className="font-bold text-emerald-800 text-lg">
+                            Общая прибыль за период:
+                          </h5>
+                          <p className="text-emerald-600 text-sm mt-1">
+                            Рассчитана на основе настроек прибыли
+                          </p>
+                        </div>
+                        <div className="mt-4 md:mt-0">
+                          <div className="bg-white border-2 border-emerald-400 rounded-lg px-6 py-4 shadow-sm">
+                            <div className="text-center">
+                              <div className="text-3xl font-bold text-emerald-700">
+                                {totalProfitForPeriod.toFixed(2)} ₽
+                              </div>
+                              <div className="text-sm text-gray-600 mt-1">
+                                Чистая прибыль за весь период
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Кнопка "Вернуться к результатам" */}
+                  <div className="mt-6 text-center">
+                    <button
+                      onClick={scrollToTop}
+                      className="bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white px-6 py-3 rounded-lg transition-all duration-300 font-semibold flex items-center justify-center mx-auto shadow-md hover:shadow-lg"
+                    >
+                      <svg
+                        className="w-5 h-5 mr-2"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M5 10l7-7m0 0l7 7m-7-7v18"
+                        />
+                      </svg>
+                      Вернуться к результатам анализа
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1038,8 +1926,8 @@ export default function OzonSalesAnalysis() {
         )}
 
         {/* Инструкция */}
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mt-6">
-          <h3 className="font-semibold text-yellow-800 mb-2 text-2xl">
+        <div className="bg-gradient-to-r from-yellow-50 to-amber-50 border border-yellow-200 rounded-xl p-6 mt-6">
+          <h3 className="font-bold text-yellow-800 mb-2 text-2xl">
             Как получить отчет из Ozon?
           </h3>
           <ol className="list-decimal list-inside space-y-2 text-yellow-700 text-lg">
