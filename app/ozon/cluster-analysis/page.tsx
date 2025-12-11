@@ -1,8 +1,8 @@
-// app/ozon/cluster-analysis/page.tsx
+// app/ozon/cluster-analysis/page.tsx (обновленная версия)
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 
 interface ClusterProductData {
@@ -10,9 +10,11 @@ interface ClusterProductData {
   productName: string;
   availableQuantity: number;
   sku: string;
-  preparingForSale: number; // Колонка L
-  expiringSoon: number; // Колонка O
-  returningFromCustomers: number; // Колонка V
+  preparingForSale: number;
+  expiringSoon: number;
+  returningFromCustomers: number;
+  dailySales28Days: number;
+  liquidityStatus: string;
 }
 
 interface ClusterAnalysisData {
@@ -25,10 +27,29 @@ interface ClusterAnalysisData {
         preparing: number;
         expiring: number;
         returning: number;
+        dailySales: number;
+        liquidityStatus: string;
       };
     };
   };
   rawData: ClusterProductData[];
+}
+
+// Интерфейс для расширенных карточек
+interface ExpandedCard {
+  [productName: string]: boolean;
+}
+
+// Интерфейс для рекомендаций по кластерам
+interface ClusterRecommendation {
+  cluster: string;
+  dailySales: number;
+  available: number;
+  daysLeft: number;
+  recommendation:
+    | "срочно поставить"
+    | "требуется поставка"
+    | "поставка не требуется";
 }
 
 export default function OzonClusterAnalysis() {
@@ -39,9 +60,44 @@ export default function OzonClusterAnalysis() {
     null
   );
   const [fileName, setFileName] = useState("");
-  const [activeView, setActiveView] = useState<"stocks" | "liquidity">(
-    "stocks"
-  );
+  const [showAllProducts, setShowAllProducts] = useState(false);
+  const [expandedCards, setExpandedCards] = useState<ExpandedCard>({});
+
+  // Ссылки на контейнеры таблиц для синхронной прокрутки
+  const stocksTableRef = useRef<HTMLDivElement>(null);
+  const liquidityTableRef = useRef<HTMLDivElement>(null);
+
+  // Эффект для синхронизации горизонтальной прокрутки таблиц
+  useEffect(() => {
+    const stocksTable = stocksTableRef.current;
+    const liquidityTable = liquidityTableRef.current;
+
+    if (!stocksTable || !liquidityTable || !analysisData) return;
+
+    const handleStocksScroll = () => {
+      liquidityTable.scrollLeft = stocksTable.scrollLeft;
+    };
+
+    const handleLiquidityScroll = () => {
+      stocksTable.scrollLeft = liquidityTable.scrollLeft;
+    };
+
+    stocksTable.addEventListener("scroll", handleStocksScroll);
+    liquidityTable.addEventListener("scroll", handleLiquidityScroll);
+
+    return () => {
+      stocksTable.removeEventListener("scroll", handleStocksScroll);
+      liquidityTable.removeEventListener("scroll", handleLiquidityScroll);
+    };
+  }, [analysisData]);
+
+  // Функция для переключения расширенного вида карточки
+  const toggleCardExpansion = (productName: string) => {
+    setExpandedCards((prev) => ({
+      ...prev,
+      [productName]: !prev[productName],
+    }));
+  };
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -56,7 +112,6 @@ export default function OzonClusterAnalysis() {
       const arrayBuffer = await file.arrayBuffer();
       const workbook = XLSX.read(arrayBuffer, { type: "array" });
 
-      // Получаем лист "Товар-кластер"
       const sheetName =
         workbook.SheetNames.find(
           (name) =>
@@ -70,10 +125,10 @@ export default function OzonClusterAnalysis() {
         defval: "",
       });
 
-      // Парсим данные - приводим к any[][]
       const dataArray = jsonData as any[][];
       const parsedData = parseClusterSheet(dataArray);
       setAnalysisData(parsedData);
+      setExpandedCards({});
     } catch (error) {
       console.error("Error parsing Excel:", error);
       alert("Ошибка при обработке файла. Проверьте формат файла.");
@@ -96,19 +151,18 @@ export default function OzonClusterAnalysis() {
       };
     }
 
-    // Начинаем с 5-й строки (индекс 4)
     const startRowIndex = 4;
 
-    // Фиксированные индексы колонок из примера файла
-    const clusterIndex = 5; // Столбец F
-    const productNameIndex = 1; // Столбец B
-    const skuIndex = 2; // Столбец C
-    const availableQuantityIndex = 10; // Столбец K (остатки на складах Ozon)
-    const preparingForSaleIndex = 11; // Столбец L (готовим к продаже)
-    const expiringSoonIndex = 14; // Столбец O (истекает срок годности)
-    const returningFromCustomersIndex = 21; // Столбец V (возвращаются от покупателей)
+    const clusterIndex = 5;
+    const productNameIndex = 1;
+    const skuIndex = 2;
+    const availableQuantityIndex = 10;
+    const preparingForSaleIndex = 11;
+    const expiringSoonIndex = 14;
+    const returningFromCustomersIndex = 21;
+    const dailySalesIndex = 8;
+    const liquidityStatusIndex = 6;
 
-    // Обрабатываем данные, начиная с 5-й строки
     for (let i = startRowIndex; i < data.length; i++) {
       const row = data[i];
       if (
@@ -120,7 +174,9 @@ export default function OzonClusterAnalysis() {
             availableQuantityIndex,
             preparingForSaleIndex,
             expiringSoonIndex,
-            returningFromCustomersIndex
+            returningFromCustomersIndex,
+            dailySalesIndex,
+            liquidityStatusIndex
           )
       ) {
         continue;
@@ -134,8 +190,9 @@ export default function OzonClusterAnalysis() {
       const expiringSoon = parseFloat(row[expiringSoonIndex]) || 0;
       const returningFromCustomers =
         parseFloat(row[returningFromCustomersIndex]) || 0;
+      const dailySales28Days = parseFloat(row[dailySalesIndex]) || 0;
+      const liquidityStatus = String(row[liquidityStatusIndex] || "").trim();
 
-      // Фильтруем заголовки и пустые строки
       if (
         cluster &&
         productName &&
@@ -152,6 +209,8 @@ export default function OzonClusterAnalysis() {
           preparingForSale,
           expiringSoon,
           returningFromCustomers,
+          dailySales28Days,
+          liquidityStatus,
         });
 
         clustersSet.add(cluster);
@@ -159,7 +218,6 @@ export default function OzonClusterAnalysis() {
       }
     }
 
-    // Группируем данные для таблицы (товары -> кластеры)
     const clusters = Array.from(clustersSet);
     const products = Array.from(productsSet);
 
@@ -170,11 +228,12 @@ export default function OzonClusterAnalysis() {
           preparing: number;
           expiring: number;
           returning: number;
+          dailySales: number;
+          liquidityStatus: string;
         };
       };
     } = {};
 
-    // Инициализируем структуру
     products.forEach((product) => {
       groupedData[product] = {};
       clusters.forEach((cluster) => {
@@ -183,11 +242,12 @@ export default function OzonClusterAnalysis() {
           preparing: 0,
           expiring: 0,
           returning: 0,
+          dailySales: 0,
+          liquidityStatus: "",
         };
       });
     });
 
-    // Заполняем данные
     clusterProductData.forEach((item) => {
       if (
         groupedData[item.productName] &&
@@ -198,6 +258,8 @@ export default function OzonClusterAnalysis() {
           preparing: item.preparingForSale,
           expiring: item.expiringSoon,
           returning: item.returningFromCustomers,
+          dailySales: item.dailySales28Days,
+          liquidityStatus: item.liquidityStatus,
         };
       }
     });
@@ -235,7 +297,6 @@ export default function OzonClusterAnalysis() {
     fileInputRef.current?.click();
   };
 
-  // Расчет суммарных остатков по товарам (только доступные)
   const calculateProductTotals = () => {
     if (!analysisData) return {};
 
@@ -252,7 +313,6 @@ export default function OzonClusterAnalysis() {
     return totals;
   };
 
-  // Расчет суммарных остатков по кластерам (только доступные)
   const calculateClusterTotals = () => {
     if (!analysisData) return {};
 
@@ -269,7 +329,38 @@ export default function OzonClusterAnalysis() {
     return totals;
   };
 
-  // Расчет дополнительных показателей по товарам
+  const calculateProductDailySalesTotals = () => {
+    if (!analysisData) return {};
+
+    const totals: { [product: string]: number } = {};
+
+    analysisData.products.forEach((product) => {
+      let total = 0;
+      analysisData.clusters.forEach((cluster) => {
+        total += analysisData.data[product][cluster]?.dailySales || 0;
+      });
+      totals[product] = total;
+    });
+
+    return totals;
+  };
+
+  const calculateClusterDailySalesTotals = () => {
+    if (!analysisData) return {};
+
+    const totals: { [cluster: string]: number } = {};
+
+    analysisData.clusters.forEach((cluster) => {
+      let total = 0;
+      analysisData.products.forEach((product) => {
+        total += analysisData.data[product][cluster]?.dailySales || 0;
+      });
+      totals[cluster] = total;
+    });
+
+    return totals;
+  };
+
   const calculateProductAdditionalTotals = () => {
     if (!analysisData) {
       return {
@@ -305,7 +396,125 @@ export default function OzonClusterAnalysis() {
     return { preparingTotals, expiringTotals, returningTotals };
   };
 
-  // Сортировка товаров по общему количеству (по убыванию)
+  // Функция для расчета дней до конца остатка по товару
+  const calculateDaysLeftForProduct = (productName: string) => {
+    if (!analysisData) return 0;
+
+    const productTotals = calculateProductTotals();
+    const salesTotals = calculateProductDailySalesTotals();
+
+    const totalQuantity = productTotals[productName] || 0;
+    const totalDailySales = salesTotals[productName] || 0;
+
+    if (totalDailySales <= 0) return Infinity; // Если нет продаж, то товара хватит навсегда
+
+    return totalQuantity / totalDailySales;
+  };
+
+  // Функция для определения рекомендации по товару
+  const getProductRecommendation = (productName: string) => {
+    const daysLeft = calculateDaysLeftForProduct(productName);
+
+    if (daysLeft <= 28) {
+      return {
+        text: "срочно поставить",
+        color: "text-red-600",
+        bgColor: "bg-red-50",
+        borderColor: "border-red-200",
+      };
+    } else if (daysLeft <= 56) {
+      return {
+        text: "требуется поставить",
+        color: "text-orange-600",
+        bgColor: "bg-orange-50",
+        borderColor: "border-orange-200",
+      };
+    } else if (daysLeft <= 120) {
+      return {
+        text: "пока хватает",
+        color: "text-green-600",
+        bgColor: "bg-green-50",
+        borderColor: "border-green-200",
+      };
+    } else {
+      return {
+        text: "избыточно",
+        color: "text-gray-600",
+        bgColor: "bg-gray-50",
+        borderColor: "border-gray-200",
+      };
+    }
+  };
+
+  // Функция для получения рекомендаций по кластерам для конкретного товара
+  const getClusterRecommendations = (
+    productName: string
+  ): ClusterRecommendation[] => {
+    if (!analysisData) return [];
+
+    const clustersWithData = analysisData.clusters
+      .filter((cluster) => {
+        const data = analysisData.data[productName][cluster];
+        return data && (data.available > 0 || data.dailySales > 0);
+      })
+      .map((cluster) => {
+        const data = analysisData.data[productName][cluster];
+        const dailySales = data?.dailySales || 0;
+        const available = data?.available || 0;
+
+        // Рассчитываем дней остатка для кластера
+        let daysLeft = Infinity;
+        if (dailySales > 0) {
+          daysLeft = available / dailySales;
+        } else if (available > 0) {
+          daysLeft = Infinity; // Есть остатки, но нет продаж
+        } else {
+          daysLeft = 0; // Нет остатков и нет продаж
+        }
+
+        // Определяем рекомендацию для кластера
+        let recommendation:
+          | "срочно поставить"
+          | "требуется поставка"
+          | "поставка не требуется";
+        if (daysLeft <= 50 || available === 0) {
+          recommendation = "срочно поставить";
+        } else if (daysLeft <= 120) {
+          recommendation = "требуется поставка";
+        } else {
+          recommendation = "поставка не требуется";
+        }
+
+        return {
+          cluster,
+          dailySales,
+          available,
+          daysLeft,
+          recommendation,
+        };
+      });
+
+    // Сортируем по среднесуточным продажам (от большего к меньшему)
+    return clustersWithData.sort((a, b) => b.dailySales - a.dailySales);
+  };
+
+  const getLiquidityColor = (status: string) => {
+    if (!status) return "bg-gray-100";
+
+    const statusLower = status.toLowerCase();
+
+    if (statusLower.includes("дефицит")) return "bg-green-100 border-green-300";
+    if (statusLower.includes("очень популярн"))
+      return "bg-blue-100 border-blue-300";
+    if (statusLower.includes("популярн") && !statusLower.includes("очень"))
+      return "bg-yellow-100 border-yellow-300";
+    if (statusLower.includes("избыточн"))
+      return "bg-orange-100 border-orange-300";
+    if (statusLower.includes("без продаж")) return "bg-red-100 border-red-300";
+
+    return "bg-gray-100 border-gray-300";
+  };
+
   const getSortedProducts = () => {
     const totals = calculateProductTotals();
     return (
@@ -315,7 +524,6 @@ export default function OzonClusterAnalysis() {
     );
   };
 
-  // Сортировка кластеров по общему количеству товаров (по убыванию)
   const getSortedClusters = () => {
     const totals = calculateClusterTotals();
     return (
@@ -325,12 +533,43 @@ export default function OzonClusterAnalysis() {
     );
   };
 
-  // Расчет количества кластеров с товарами
+  const getProductsSortedBySales = () => {
+    const salesTotals = calculateProductDailySalesTotals();
+    return (
+      analysisData?.products.sort(
+        (a, b) => (salesTotals[b] || 0) - (salesTotals[a] || 0)
+      ) || []
+    );
+  };
+
   const getClustersWithProductsCount = () => {
     if (!analysisData) return 0;
 
     const clusterTotals = calculateClusterTotals();
     return Object.values(clusterTotals).filter((total) => total > 0).length;
+  };
+
+  const getTotalDailySales = () => {
+    if (!analysisData) return 0;
+
+    const salesTotals = calculateProductDailySalesTotals();
+    return Object.values(salesTotals).reduce((sum, total) => sum + total, 0);
+  };
+
+  // Расчет высоты для контейнера (5 строк + заголовок + итоговая строка)
+  const calculateTableHeight = () => {
+    const visibleRows = 5;
+    const headerHeight = 60;
+    const rowHeight = 50;
+    const footerHeight = 50;
+
+    return headerHeight + rowHeight * visibleRows + footerHeight;
+  };
+
+  // Получаем список товаров для отображения в статистике
+  const getProductsToShow = () => {
+    const sortedProducts = getSortedProducts();
+    return showAllProducts ? sortedProducts : sortedProducts.slice(0, 3);
   };
 
   return (
@@ -353,7 +592,7 @@ export default function OzonClusterAnalysis() {
         </p>
 
         {/* Блок загрузки файла */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6 ">
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <h2 className="text-xl font-semibold mb-4 text-gray-800">
             Загрузка отчета по кластерам
           </h2>
@@ -421,102 +660,245 @@ export default function OzonClusterAnalysis() {
         {/* Результаты анализа */}
         {analysisData && (
           <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-semibold text-gray-800">
-                Анализ остатков по кластерам
-              </h2>
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setActiveView("stocks")}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
-                    activeView === "stocks"
-                      ? "bg-blue-500 text-white"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
-                >
-                  Остатки
-                </button>
-                <button
-                  onClick={() => setActiveView("liquidity")}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
-                    activeView === "liquidity"
-                      ? "bg-blue-500 text-white"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
-                >
-                  Ликвидность
-                </button>
+            <h2 className="text-2xl font-semibold text-gray-800 mb-6">
+              Анализ остатков по кластерам
+            </h2>
+
+            {/* Сводная информация */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-blue-50 rounded-lg p-4">
+                <div className="text-2xl font-bold text-blue-600">
+                  {getClustersWithProductsCount()}
+                </div>
+                <div className="text-sm text-gray-600">Кластеры с товарами</div>
+              </div>
+              <div className="bg-green-50 rounded-lg p-4">
+                <div className="text-2xl font-bold text-green-600">
+                  {analysisData.products.length}
+                </div>
+                <div className="text-sm text-gray-600">Всего товаров</div>
+              </div>
+              <div className="bg-purple-50 rounded-lg p-4">
+                <div className="text-2xl font-bold text-purple-600">
+                  {analysisData.rawData.reduce(
+                    (sum, item) => sum + item.availableQuantity,
+                    0
+                  )}
+                </div>
+                <div className="text-sm text-gray-600">
+                  Общее количество остатков
+                </div>
+              </div>
+              <div className="bg-teal-50 rounded-lg p-4">
+                <div className="text-2xl font-bold text-teal-600">
+                  {getTotalDailySales().toFixed(2)}
+                </div>
+                <div className="text-sm text-gray-600">
+                  Среднесуточные продажи
+                </div>
               </div>
             </div>
 
-            {activeView === "stocks" && (
-              <>
-                {/* Сводная информация */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                  <div className="bg-blue-50 rounded-lg p-4">
-                    <div className="text-2xl font-bold text-blue-600">
-                      {getClustersWithProductsCount()}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      Кластеры с товарами
-                    </div>
-                  </div>
-                  <div className="bg-green-50 rounded-lg p-4">
-                    <div className="text-2xl font-bold text-green-600">
-                      {analysisData.products.length}
-                    </div>
-                    <div className="text-sm text-gray-600">Всего товаров</div>
-                  </div>
-                  <div className="bg-purple-50 rounded-lg p-4">
-                    <div className="text-2xl font-bold text-purple-600">
-                      {analysisData.rawData.reduce(
-                        (sum, item) => sum + item.availableQuantity,
-                        0
-                      )}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      Общее количество остатков
-                    </div>
-                  </div>
-                </div>
-
-                {/* Таблица остатков */}
-                <div className="mb-8 text-gray-800">
-                  <h3 className="text-xl font-semibold mb-4">
+            {/* ТАБЛИЦА ОСТАТКОВ */}
+            <div className="mb-8 text-gray-800">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-xl font-semibold">
                     Остатки товаров по кластерам
                   </h3>
-                  <p className="text-gray-600 mb-4 text-sm">
-                    Товары по строкам, кластеры по столбцам
+                  <p className="text-gray-600 text-sm mt-1">
+                    Товары по строкам, кластеры по столбцам. Показано{" "}
+                    {Math.min(5, getSortedProducts().length)} из{" "}
+                    {getSortedProducts().length} товаров
                   </p>
-                  <div className="overflow-x-auto border border-gray-300 rounded-lg">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="bg-gray-100">
-                          <th className="p-3 text-left border-b border-r border-gray-300 sticky left-0 bg-gray-100 z-10 min-w-[200px]">
-                            Товар
-                          </th>
-                          {getSortedClusters().map((cluster, index) => (
-                            <th
-                              key={index}
-                              className="p-3 text-left border-b border-gray-300 min-w-[120px]"
+                </div>
+                {getSortedProducts().length > 5 && (
+                  <div className="text-sm text-gray-500">
+                    ↕ Прокрутка доступна ({getSortedProducts().length} товаров)
+                  </div>
+                )}
+              </div>
+
+              <div
+                ref={stocksTableRef}
+                className="overflow-x-auto border border-gray-300 rounded-lg"
+                style={{
+                  height: `${calculateTableHeight()}px`,
+                  overflowY: "auto",
+                  overflowX: "auto",
+                }}
+              >
+                <div className="min-w-max">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="p-3 text-left border-b border-r border-gray-300 sticky left-0 top-0 bg-gray-100 z-20 min-w-[200px]">
+                          Товар
+                        </th>
+                        {getSortedClusters().map((cluster, index) => (
+                          <th
+                            key={index}
+                            className="p-3 text-left border-b border-gray-300 min-w-[120px] sticky top-0 bg-gray-100 z-10"
+                          >
+                            <div
+                              className="truncate max-w-[120px]"
+                              title={cluster}
                             >
-                              <div
-                                className="truncate max-w-[120px]"
-                                title={cluster}
-                              >
-                                {cluster}
-                              </div>
-                            </th>
-                          ))}
-                          <th className="p-3 text-left border-b border-gray-300 bg-blue-50 font-semibold min-w-[100px]">
-                            Всего
+                              {cluster}
+                            </div>
                           </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {getSortedProducts().map((product, productIndex) => {
-                          const productTotals = calculateProductTotals();
-                          const total = productTotals[product] || 0;
+                        ))}
+                        <th className="p-3 text-left border-b border-gray-300 bg-blue-50 font-semibold min-w-[100px] sticky top-0 bg-blue-50 z-10">
+                          Всего
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getSortedProducts().map((product, productIndex) => {
+                        const productTotals = calculateProductTotals();
+                        const total = productTotals[product] || 0;
+
+                        return (
+                          <tr
+                            key={productIndex}
+                            className={
+                              productIndex % 2 === 0 ? "bg-white" : "bg-gray-50"
+                            }
+                          >
+                            <td className="p-3 border-b border-r border-gray-300 sticky left-0 bg-white z-10 font-medium">
+                              <div
+                                className="truncate max-w-[200px]"
+                                title={product}
+                              >
+                                {product}
+                              </div>
+                            </td>
+                            {getSortedClusters().map(
+                              (cluster, clusterIndex) => {
+                                const quantity =
+                                  analysisData.data[product][cluster]
+                                    ?.available || 0;
+                                let bgColor = "";
+
+                                if (quantity === 0) {
+                                  bgColor = "bg-red-50";
+                                } else if (quantity <= 2) {
+                                  bgColor = "bg-yellow-50";
+                                } else if (quantity <= 5) {
+                                  bgColor = "bg-green-50";
+                                } else {
+                                  bgColor = "bg-blue-50";
+                                }
+
+                                return (
+                                  <td
+                                    key={clusterIndex}
+                                    className={`p-3 border-b border-gray-300 text-center ${bgColor}`}
+                                  >
+                                    {quantity > 0 ? quantity : "-"}
+                                  </td>
+                                );
+                              }
+                            )}
+                            <td className="p-3 border-b border-gray-300 text-center font-semibold bg-blue-50">
+                              {total}
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {/* Строка с итогами по кластерам */}
+                      <tr className="bg-gray-100">
+                        <td className="p-3 border-b border-r border-gray-300 sticky left-0 bg-gray-100 z-10 font-semibold">
+                          Всего
+                        </td>
+                        {getSortedClusters().map((cluster, index) => {
+                          const clusterTotals = calculateClusterTotals();
+                          const total = clusterTotals[cluster] || 0;
+
+                          return (
+                            <td
+                              key={index}
+                              className="p-3 border-b border-gray-300 text-center font-semibold bg-blue-50"
+                            >
+                              {total}
+                            </td>
+                          );
+                        })}
+                        <td className="p-3 border-b border-gray-300 text-center font-bold bg-blue-100">
+                          {analysisData.rawData.reduce(
+                            (sum, item) => sum + item.availableQuantity,
+                            0
+                          )}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {/* ТАБЛИЦА ЛИКВИДНОСТИ */}
+            <div className="mb-8 text-gray-800">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-xl font-semibold">
+                    Анализ ликвидности по кластерам
+                  </h3>
+                  <p className="text-gray-600 text-sm mt-1">
+                    Среднесуточные продажи за 28 дней. Показано{" "}
+                    {Math.min(5, getProductsSortedBySales().length)} из{" "}
+                    {getProductsSortedBySales().length} товаров
+                  </p>
+                </div>
+                {getProductsSortedBySales().length > 5 && (
+                  <div className="text-sm text-gray-500">
+                    ↕ Прокрутка доступна ({getProductsSortedBySales().length}{" "}
+                    товаров)
+                  </div>
+                )}
+              </div>
+
+              <div
+                ref={liquidityTableRef}
+                className="overflow-x-auto border border-gray-300 rounded-lg"
+                style={{
+                  height: `${calculateTableHeight()}px`,
+                  overflowY: "auto",
+                  overflowX: "auto",
+                }}
+              >
+                <div className="min-w-max">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="p-3 text-left border-b border-r border-gray-300 sticky left-0 top-0 bg-gray-100 z-20 min-w-[200px]">
+                          Товар
+                        </th>
+                        {getSortedClusters().map((cluster, index) => (
+                          <th
+                            key={index}
+                            className="p-3 text-left border-b border-gray-300 min-w-[120px] sticky top-0 bg-gray-100 z-10"
+                          >
+                            <div
+                              className="truncate max-w-[120px]"
+                              title={cluster}
+                            >
+                              {cluster}
+                            </div>
+                          </th>
+                        ))}
+                        <th className="p-3 text-left border-b border-gray-300 bg-teal-50 font-semibold min-w-[100px] sticky top-0 bg-teal-50 z-10">
+                          Всего продаж/день
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getProductsSortedBySales().map(
+                        (product, productIndex) => {
+                          const salesTotals =
+                            calculateProductDailySalesTotals();
+                          const totalSales = salesTotals[product] || 0;
 
                           return (
                             <tr
@@ -537,221 +919,546 @@ export default function OzonClusterAnalysis() {
                               </td>
                               {getSortedClusters().map(
                                 (cluster, clusterIndex) => {
-                                  const quantity =
+                                  const dailySales =
                                     analysisData.data[product][cluster]
-                                      ?.available || 0;
-                                  let bgColor = "";
+                                      ?.dailySales || 0;
+                                  const liquidityStatus =
+                                    analysisData.data[product][cluster]
+                                      ?.liquidityStatus || "";
 
-                                  if (quantity === 0) {
-                                    bgColor = "bg-red-50";
-                                  } else if (quantity <= 2) {
-                                    bgColor = "bg-yellow-50";
-                                  } else if (quantity <= 5) {
-                                    bgColor = "bg-green-50";
-                                  } else {
-                                    bgColor = "bg-blue-50";
-                                  }
+                                  const bgColor =
+                                    getLiquidityColor(liquidityStatus);
 
                                   return (
                                     <td
                                       key={clusterIndex}
                                       className={`p-3 border-b border-gray-300 text-center ${bgColor}`}
+                                      title={`${dailySales} продаж/день, статус: ${
+                                        liquidityStatus || "не указан"
+                                      }`}
                                     >
-                                      {quantity > 0 ? quantity : "-"}
+                                      {dailySales > 0
+                                        ? dailySales.toFixed(2)
+                                        : "-"}
                                     </td>
                                   );
                                 }
                               )}
-                              <td className="p-3 border-b border-gray-300 text-center font-semibold bg-blue-50">
-                                {total}
+                              <td className="p-3 border-b border-gray-300 text-center font-semibold bg-teal-50">
+                                {totalSales > 0 ? totalSales.toFixed(2) : "-"}
                               </td>
                             </tr>
                           );
+                        }
+                      )}
+
+                      {/* Строка с итогами по кластерам для продаж */}
+                      <tr className="bg-gray-100">
+                        <td className="p-3 border-b border-r border-gray-300 sticky left-0 bg-gray-100 z-10 font-semibold">
+                          Всего продаж/день
+                        </td>
+                        {getSortedClusters().map((cluster, index) => {
+                          const clusterSalesTotals =
+                            calculateClusterDailySalesTotals();
+                          const total = clusterSalesTotals[cluster] || 0;
+
+                          return (
+                            <td
+                              key={index}
+                              className="p-3 border-b border-gray-300 text-center font-semibold bg-teal-50"
+                            >
+                              {total > 0 ? total.toFixed(2) : "-"}
+                            </td>
+                          );
                         })}
+                        <td className="p-3 border-b border-gray-300 text-center font-bold bg-teal-100">
+                          {getTotalDailySales().toFixed(2)}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-                        {/* Строка с итогами по кластерам */}
-                        <tr className="bg-gray-100">
-                          <td className="p-3 border-b border-r border-gray-300 sticky left-0 bg-gray-100 z-10 font-semibold">
-                            Всего
-                          </td>
-                          {getSortedClusters().map((cluster, index) => {
-                            const clusterTotals = calculateClusterTotals();
-                            const total = clusterTotals[cluster] || 0;
-
-                            return (
-                              <td
-                                key={index}
-                                className="p-3 border-b border-gray-300 text-center font-semibold bg-blue-50"
-                              >
-                                {total}
-                              </td>
-                            );
-                          })}
-                          <td className="p-3 border-b border-gray-300 text-center font-bold bg-blue-100">
-                            {analysisData.rawData.reduce(
-                              (sum, item) => sum + item.availableQuantity,
-                              0
-                            )}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
+              {/* ЛЕГЕНДА СТАТУСОВ ЛИКВИДНОСТИ (после таблицы) */}
+              <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                <h4 className="font-medium text-gray-700 mb-2">
+                  Легенда статусов ликвидности:
+                </h4>
+                <div className="flex flex-wrap gap-3">
+                  <div className="flex items-center">
+                    <div className="w-4 h-4 bg-green-100 border border-green-300 rounded mr-2"></div>
+                    <span className="text-sm">Дефицитный / Был дефицитный</span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-4 h-4 bg-blue-100 border border-blue-300 rounded mr-2"></div>
+                    <span className="text-sm">
+                      Очень популярный / Был очень популярный
+                    </span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-4 h-4 bg-yellow-100 border border-yellow-300 rounded mr-2"></div>
+                    <span className="text-sm">Популярный / Был популярный</span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-4 h-4 bg-orange-100 border border-orange-300 rounded mr-2"></div>
+                    <span className="text-sm">Избыточный / Был избыточный</span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-4 h-4 bg-red-100 border border-red-300 rounded mr-2"></div>
+                    <span className="text-sm">Без продаж / Был без продаж</span>
                   </div>
                 </div>
+              </div>
+            </div>
 
-                {/* Сводная информация по товарам */}
-                <div className="mb-6 text-gray-800">
-                  <h3 className="text-xl font-semibold mb-4">
-                    Статистика по товарам
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {getSortedProducts().map((product, index) => {
-                      const totals = calculateProductTotals();
-                      const additionalTotals =
-                        calculateProductAdditionalTotals();
-                      const total = totals[product] || 0;
-                      const preparingTotal =
-                        additionalTotals?.preparingTotals?.[product] || 0;
-                      const expiringTotal =
-                        additionalTotals?.expiringTotals?.[product] || 0;
-                      const returningTotal =
-                        additionalTotals?.returningTotals?.[product] || 0;
-                      const productClusters = analysisData.clusters.filter(
-                        (cluster) =>
-                          analysisData.data[product][cluster]?.available > 0
-                      ).length;
+            {/* Сводная информация по товарам */}
+            <div className="mb-6 text-gray-800">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-semibold">
+                  Статистика по товарам с рекомендациями
+                </h3>
+                {getSortedProducts().length > 3 && (
+                  <button
+                    onClick={() => setShowAllProducts(!showAllProducts)}
+                    className="text-blue-500 hover:text-blue-700 font-medium"
+                  >
+                    {showAllProducts
+                      ? "Скрыть"
+                      : `Показать все (${getSortedProducts().length})`}
+                  </button>
+                )}
+              </div>
 
-                      return (
+              <div
+                className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 ${
+                  showAllProducts ? "max-h-auto" : ""
+                }`}
+              >
+                {getProductsToShow().map((product, index) => {
+                  const totals = calculateProductTotals();
+                  const salesTotals = calculateProductDailySalesTotals();
+                  const additionalTotals = calculateProductAdditionalTotals();
+                  const total = totals[product] || 0;
+                  const totalSales = salesTotals[product] || 0;
+                  const preparingTotal =
+                    additionalTotals?.preparingTotals?.[product] || 0;
+                  const expiringTotal =
+                    additionalTotals?.expiringTotals?.[product] || 0;
+                  const returningTotal =
+                    additionalTotals?.returningTotals?.[product] || 0;
+                  const productClusters = analysisData.clusters.filter(
+                    (cluster) =>
+                      analysisData.data[product][cluster]?.available > 0
+                  );
+                  const isExpanded = expandedCards[product] || false;
+
+                  // Получаем рекомендацию для товара
+                  const productRecommendation =
+                    getProductRecommendation(product);
+                  const daysLeft = calculateDaysLeftForProduct(product);
+                  const daysLeftText = isFinite(daysLeft)
+                    ? daysLeft.toFixed(1)
+                    : "∞";
+
+                  // Получаем рекомендации по кластерам
+                  const clusterRecommendations =
+                    getClusterRecommendations(product);
+                  const firstRecommendation = clusterRecommendations[0];
+
+                  return (
+                    <div
+                      key={index}
+                      className={`bg-gray-50 rounded-lg border border-gray-200 flex flex-col transition-all duration-300 ${
+                        isExpanded
+                          ? "fixed inset-0 md:inset-8 lg:inset-12 z-50 bg-white/95 backdrop-blur-sm"
+                          : "relative h-full"
+                      }`}
+                    >
+                      {/* Затемнение фона при открытии */}
+                      {isExpanded && (
                         <div
-                          key={index}
-                          className="bg-gray-50 rounded-lg p-4 border border-gray-200 flex flex-col h-full"
-                        >
-                          {/* Заголовок с названием товара и общими остатками */}
-                          <div className="flex justify-between items-start mb-3">
-                            <h4
-                              className="font-semibold text-gray-800 flex-1 mr-2 text-sm line-clamp-2"
-                              title={product}
-                              style={{
-                                display: "-webkit-box",
-                                WebkitLineClamp: 2,
-                                WebkitBoxOrient: "vertical",
-                                overflow: "hidden",
-                              }}
+                          className="fixed inset-0 bg-black/50 z-40"
+                          onClick={() => toggleCardExpansion(product)}
+                        />
+                      )}
+
+                      <div
+                        className={`p-4 flex-grow ${
+                          isExpanded
+                            ? "max-w-5xl mx-auto w-full bg-white rounded-xl shadow-2xl z-50 relative max-h-[90vh] overflow-y-auto"
+                            : ""
+                        }`}
+                      >
+                        {/* Заголовок карточки */}
+                        <div className="flex justify-between items-start mb-3">
+                          <h4
+                            className={`font-semibold text-gray-800 flex-1 mr-2 ${
+                              isExpanded ? "text-2xl" : "text-sm line-clamp-2"
+                            }`}
+                            title={product}
+                            style={
+                              !isExpanded
+                                ? {
+                                    display: "-webkit-box",
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: "vertical",
+                                    overflow: "hidden",
+                                  }
+                                : {}
+                            }
+                          >
+                            {product}
+                          </h4>
+                          <div className="flex flex-col items-end">
+                            <span
+                              className={`font-bold text-blue-600 whitespace-nowrap ${
+                                isExpanded ? "text-2xl" : "text-lg"
+                              }`}
                             >
-                              {product}
-                            </h4>
-                            <span className="text-lg font-bold text-blue-600 whitespace-nowrap ml-2">
                               {total} шт
                             </span>
+                            {totalSales > 0 && (
+                              <span
+                                className={`text-teal-600 whitespace-nowrap ${
+                                  isExpanded ? "text-lg" : "text-sm"
+                                }`}
+                              >
+                                {totalSales.toFixed(2)} прод./день
+                              </span>
+                            )}
                           </div>
+                        </div>
 
-                          {/* Основная информация */}
-                          <div className="space-y-2 mb-3">
-                            <div className="text-sm text-gray-600 flex justify-between">
-                              <span>Кластеров:</span>
-                              <span className="font-medium">
-                                {productClusters}
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-600 flex justify-between">
-                              <span>Готовится к продаже:</span>
-                              <span className="font-medium">
-                                {preparingTotal} шт
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-600 flex justify-between">
-                              <span>Истекает срок годности:</span>
-                              <span className="font-medium">
-                                {expiringTotal} шт
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-600 flex justify-between">
-                              <span>Возвращаются от покупателя:</span>
-                              <span className="font-medium">
-                                {returningTotal} шт
-                              </span>
-                            </div>
+                        {/* Рекомендация по товару (компактная) */}
+                        <div
+                          className={`mb-3 p-2 rounded-lg border ${productRecommendation.bgColor} ${productRecommendation.borderColor}`}
+                        >
+                          <div className="flex justify-between items-center">
+                            <span
+                              className={`font-medium ${productRecommendation.color}`}
+                            >
+                              {productRecommendation.text}
+                            </span>
+                            <span className="text-sm text-gray-600">
+                              {daysLeftText} дней остатка
+                            </span>
                           </div>
+                        </div>
 
-                          {/* Распределение по кластерам с прокруткой */}
-                          <div className="mt-2 flex-grow">
-                            <div className="text-xs text-gray-500 mb-1">
-                              Распределение по кластерам:
+                        {/* Основная информация */}
+                        <div className="space-y-2 mb-3">
+                          <div className="text-gray-600 flex justify-between">
+                            <span
+                              className={isExpanded ? "text-base" : "text-sm"}
+                            >
+                              Кластеров:
+                            </span>
+                            <span
+                              className={`font-medium ${
+                                isExpanded ? "text-base" : "text-sm"
+                              }`}
+                            >
+                              {productClusters.length}
+                            </span>
+                          </div>
+                          {totalSales > 0 && (
+                            <div className="text-gray-600 flex justify-between">
+                              <span
+                                className={isExpanded ? "text-base" : "text-sm"}
+                              >
+                                Среднесуточные продажи:
+                              </span>
+                              <span
+                                className={`font-medium ${
+                                  isExpanded ? "text-base" : "text-sm"
+                                }`}
+                              >
+                                {totalSales.toFixed(2)} шт
+                              </span>
+                            </div>
+                          )}
+                          <div className="text-gray-600 flex justify-between">
+                            <span
+                              className={isExpanded ? "text-base" : "text-sm"}
+                            >
+                              Готовится к продаже:
+                            </span>
+                            <span
+                              className={`font-medium ${
+                                isExpanded ? "text-base" : "text-sm"
+                              }`}
+                            >
+                              {preparingTotal} шт
+                            </span>
+                          </div>
+                          <div className="text-gray-600 flex justify-between">
+                            <span
+                              className={isExpanded ? "text-base" : "text-sm"}
+                            >
+                              Истекает срок годности:
+                            </span>
+                            <span
+                              className={`font-medium ${
+                                isExpanded ? "text-base" : "text-sm"
+                              }`}
+                            >
+                              {expiringTotal} шт
+                            </span>
+                          </div>
+                          <div className="text-gray-600 flex justify-between">
+                            <span
+                              className={isExpanded ? "text-base" : "text-sm"}
+                            >
+                              Возвращаются от покупателя:
+                            </span>
+                            <span
+                              className={`font-medium ${
+                                isExpanded ? "text-base" : "text-sm"
+                              }`}
+                            >
+                              {returningTotal} шт
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Первая рекомендация по кластерам (только в обычном режиме) */}
+                        {!isExpanded && firstRecommendation && (
+                          <div className="mt-3">
+                            <div className="text-gray-700 font-medium mb-2 text-sm">
+                              Первая рекомендация по кластерам:
                             </div>
                             <div
-                              className="space-y-1 overflow-y-auto pr-1"
-                              style={{ maxHeight: "120px" }}
+                              className={`p-2 rounded border ${
+                                firstRecommendation.recommendation ===
+                                "срочно поставить"
+                                  ? "bg-red-50 border-red-200"
+                                  : firstRecommendation.recommendation ===
+                                    "требуется поставка"
+                                  ? "bg-orange-50 border-orange-200"
+                                  : "bg-green-50 border-green-200"
+                              }`}
                             >
-                              {analysisData.clusters
-                                .filter(
-                                  (cluster) =>
-                                    analysisData.data[product][cluster]
-                                      ?.available > 0
-                                )
-                                .map((cluster, clusterIndex) => (
-                                  <div
-                                    key={clusterIndex}
-                                    className="flex justify-between text-xs"
-                                  >
-                                    <span
-                                      className="truncate max-w-[70%]"
-                                      title={cluster}
-                                    >
-                                      {cluster}
-                                    </span>
-                                    <span className="font-medium whitespace-nowrap">
-                                      {analysisData.data[product][cluster]
-                                        ?.available || 0}{" "}
-                                      шт
-                                    </span>
-                                  </div>
-                                ))}
-                              {analysisData.clusters.filter(
-                                (cluster) =>
-                                  analysisData.data[product][cluster]
-                                    ?.available > 0
-                              ).length === 0 && (
-                                <div className="text-xs text-gray-400 italic text-center py-2">
-                                  Нет остатков на складах
+                              <div className="flex justify-between items-center mb-1">
+                                <span
+                                  className={`font-medium text-sm ${
+                                    firstRecommendation.recommendation ===
+                                    "срочно поставить"
+                                      ? "text-red-600"
+                                      : firstRecommendation.recommendation ===
+                                        "требуется поставка"
+                                      ? "text-orange-600"
+                                      : "text-green-600"
+                                  }`}
+                                >
+                                  {firstRecommendation.cluster}
+                                </span>
+                                <span className="text-xs text-gray-600">
+                                  {isFinite(firstRecommendation.daysLeft)
+                                    ? firstRecommendation.daysLeft.toFixed(1)
+                                    : "∞"}{" "}
+                                  дней
+                                </span>
+                              </div>
+                              <div className="flex justify-between text-xs">
+                                <div>
+                                  <span className="text-gray-600">
+                                    Остаток:{" "}
+                                  </span>
+                                  <span className="font-medium">
+                                    {firstRecommendation.available} шт
+                                  </span>
                                 </div>
+                                <div>
+                                  <span className="text-gray-600">
+                                    Продажи:{" "}
+                                  </span>
+                                  <span className="font-medium">
+                                    {firstRecommendation.dailySales.toFixed(2)}
+                                    /день
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="mt-1 text-xs font-medium">
+                                {firstRecommendation.recommendation}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Полные рекомендации по кластерам (только в расширенном режиме) */}
+                        {isExpanded && clusterRecommendations.length > 0 && (
+                          <div className="mt-6">
+                            <h5 className="text-lg font-semibold text-gray-800 mb-4">
+                              Рекомендации по кластерам:
+                            </h5>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {clusterRecommendations.map(
+                                (recommendation, clusterIndex) => {
+                                  // Цвет для рекомендации
+                                  let recColor = "";
+                                  let recBgColor = "";
+                                  let recBorderColor = "";
+
+                                  if (
+                                    recommendation.recommendation ===
+                                    "срочно поставить"
+                                  ) {
+                                    recColor = "text-red-600";
+                                    recBgColor = "bg-red-50";
+                                    recBorderColor = "border-red-200";
+                                  } else if (
+                                    recommendation.recommendation ===
+                                    "требуется поставка"
+                                  ) {
+                                    recColor = "text-orange-600";
+                                    recBgColor = "bg-orange-50";
+                                    recBorderColor = "border-orange-200";
+                                  } else {
+                                    recColor = "text-green-600";
+                                    recBgColor = "bg-green-50";
+                                    recBorderColor = "border-green-200";
+                                  }
+
+                                  const daysLeftText = isFinite(
+                                    recommendation.daysLeft
+                                  )
+                                    ? recommendation.daysLeft.toFixed(1)
+                                    : "∞";
+
+                                  return (
+                                    <div
+                                      key={clusterIndex}
+                                      className={`p-3 rounded-lg border ${recBgColor} ${recBorderColor} transition-transform hover:scale-[1.02]`}
+                                    >
+                                      <div className="flex justify-between items-center mb-2">
+                                        <span
+                                          className={`font-semibold ${recColor}`}
+                                        >
+                                          {recommendation.cluster}
+                                        </span>
+                                        <span className="text-sm text-gray-600">
+                                          {daysLeftText} дней
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between text-sm mb-2">
+                                        <div>
+                                          <span className="text-gray-600">
+                                            Остаток:{" "}
+                                          </span>
+                                          <span className="font-medium">
+                                            {recommendation.available} шт
+                                          </span>
+                                        </div>
+                                        <div>
+                                          <span className="text-gray-600">
+                                            Продажи:{" "}
+                                          </span>
+                                          <span className="font-medium">
+                                            {recommendation.dailySales.toFixed(
+                                              2
+                                            )}
+                                            /день
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <div className="mt-2">
+                                        <div
+                                          className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${recColor} ${recBgColor}`}
+                                        >
+                                          {recommendation.recommendation}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                }
                               )}
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
-            )}
+                        )}
 
-            {activeView === "liquidity" && (
-              <div className="text-center p-8 bg-gray-50 rounded-lg">
-                <h3 className="text-xl font-semibold mb-4">
-                  Анализ ликвидности
-                </h3>
-                <p className="text-gray-600 mb-4">
-                  Раздел в разработке. Здесь будет анализ ликвидности товаров по
-                  кластерам.
-                </p>
-                <div className="inline-flex items-center px-4 py-2 bg-yellow-100 text-yellow-800 rounded-lg">
-                  <svg
-                    className="w-5 h-5 mr-2"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.998-.833-2.732 0L4.34 16.5c-.77.833.192 2.5 1.732 2.5z"
-                    />
-                  </svg>
-                  Функционал будет добавлен в следующем обновлении
-                </div>
+                        {/* График дней остатка по кластерам (только в расширенном режиме) */}
+                        {isExpanded && clusterRecommendations.length > 0 && (
+                          <div className="mt-8">
+                            <h5 className="text-lg font-semibold text-gray-800 mb-4">
+                              Диаграмма дней остатка по кластерам:
+                            </h5>
+                            <div className="space-y-2">
+                              {clusterRecommendations
+                                .filter((rec) => isFinite(rec.daysLeft))
+                                .sort((a, b) => b.daysLeft - a.daysLeft)
+                                .slice(0, 10)
+                                .map((recommendation, index) => {
+                                  const days = recommendation.daysLeft;
+                                  const maxDays = Math.max(
+                                    ...clusterRecommendations
+                                      .filter((rec) => isFinite(rec.daysLeft))
+                                      .map((rec) => rec.daysLeft)
+                                  );
+                                  const percentage = (days / maxDays) * 100;
+
+                                  let barColor = "";
+                                  if (days <= 50) barColor = "bg-red-500";
+                                  else if (days <= 120)
+                                    barColor = "bg-orange-500";
+                                  else barColor = "bg-green-500";
+
+                                  return (
+                                    <div key={index} className="space-y-1">
+                                      <div className="flex justify-between text-sm">
+                                        <span className="font-medium">
+                                          {recommendation.cluster}
+                                        </span>
+                                        <span className="text-gray-600">
+                                          {days.toFixed(1)} дней
+                                        </span>
+                                      </div>
+                                      <div className="w-full bg-gray-200 rounded-full h-3">
+                                        <div
+                                          className={`${barColor} h-3 rounded-full transition-all duration-500`}
+                                          style={{ width: `${percentage}%` }}
+                                        ></div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Кнопка открыть/скрыть */}
+                      <div
+                        className={`p-3 border-t border-gray-200 ${
+                          isExpanded
+                            ? "bg-white rounded-b-xl"
+                            : "bg-gray-50 rounded-b-lg"
+                        }`}
+                      >
+                        <button
+                          onClick={() => toggleCardExpansion(product)}
+                          className={`w-full font-medium transition-all duration-300 ${
+                            isExpanded
+                              ? "bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-lg"
+                              : "text-blue-500 hover:text-blue-700 text-sm py-1"
+                          }`}
+                        >
+                          {isExpanded
+                            ? "✕ Закрыть детализацию"
+                            : "📊 Открыть детализацию →"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            )}
+
+              {!showAllProducts && getSortedProducts().length > 3 && (
+                <div className="mt-4 text-center text-gray-500 text-sm">
+                  Показаны первые 3 товара из {getSortedProducts().length}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
