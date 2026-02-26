@@ -1,36 +1,102 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Ozone & Wildberries Analytics
 
-## Getting Started
+**Аналитический инструмент для маркетплейсов Ozon и Wildberries**
 
-First, run the development server:
+Проект создан на **Next.js 16** с использованием **React 19**, **TypeScript** и **Tailwind CSS**. Позволяет работать с Excel-файлами (импорт/экспорт) благодаря библиотеке `xlsx`.
 
-```bash
+## 🚀 Быстрый старт
+
+### Требования
+
+- **Node.js** версии 20.9.0 или выше (проверить можно командой `node -v`)
+- **npm** (обычно устанавливается вместе с Node.js)
+
+### Установка и запуск
+
+1. **Клонируйте репозиторий**
+   ```bash
+   git clone <ссылка на ваш репозиторий>
+   cd ozone-wb-analytics
+   Установите зависимости
+   ```
+
+bash
+npm install
+Эта команда установит все необходимые пакеты из package.json.
+
+Запустите сервер разработки
+
+bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Откройте приложение
+Перейдите по адресу http://localhost:3000 в вашем браузере.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+📦 Скрипты
+В проекте доступны следующие команды:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Команда Описание
+npm run dev Запуск сервера для разработки с "горячей" перезагрузкой
+npm run build Сборка проекта для продакшена
+npm run start Запуск собранного проекта (после npm run build)
+npm run lint Проверка кода линтером ESLint
+🛠 Стек технологий
+Next.js 16.1.1 — React-фреймворк с серверным рендерингом
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+React 19.2.0 — библиотека для пользовательских интерфейсов
 
-## Learn More
+TypeScript 5 — типизация JavaScript
 
-To learn more about Next.js, take a look at the following resources:
+Tailwind CSS 4 — CSS-фреймворк для стилизации
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+XLSX 0.18.5 — работа с Excel-файлами
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+ESLint 9 — проверка качества кода
 
-## Deploy on Vercel
+🗂 Структура проекта (ожидаемая)
+text
+ozone-wb-analytics/
+├── public/ # Статические файлы
+├── src/ # Исходный код
+│ ├── app/ # Папка App Router (Next.js 13+)
+│ ├── components/ # React-компоненты
+│ ├── hooks/ # Пользовательские хуки
+│ ├── utils/ # Вспомогательные функции
+│ └── styles/ # Глобальные стили
+├── .eslintrc.json # Конфигурация ESLint
+├── next.config.js # Конфигурация Next.js
+├── package.json # Зависимости и скрипты
+├── tsconfig.json # Конфигурация TypeScript
+└── README.md # Документация
+⚠️ Важные замечания
+Перемещение проекта
+Если вы копируете проект в другую папку, обязательно выполните следующие шаги:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Удалите папку node_modules и файл package-lock.json
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Заново выполните npm install
+
+Это необходимо, чтобы избежать ошибок, связанных с абсолютными путями в зависимостях.
+
+Переменные окружения
+Если в проекте используются API-ключи или другие секретные данные, создайте файл .env.local в корне проекта:
+
+env
+
+# Пример переменных
+
+NEXT_PUBLIC_API_URL=...
+🤝 Как внести вклад
+Сделайте fork репозитория
+
+Создайте ветку для новой функции (git checkout -b feature/amazing-feature)
+
+Зафиксируйте изменения (git commit -m 'Add some amazing feature')
+
+Отправьте изменения в свой fork (git push origin feature/amazing-feature)
+
+Откройте Pull Request
+
+📄 Лицензия
+Проект является приватным и предназначен для внутреннего использования.
+
+Автор: [Ваше имя]
