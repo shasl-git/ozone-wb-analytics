@@ -86,15 +86,60 @@ export default function OzonUnitEconomics() {
       1000;
 
     // Определяем индекс по литражу
+
     let index;
-    if (liters <= 1) {
-      index = 46.77;
+    if (liters <= 0.2) {
+      index = 50;
+    } else if (liters <= 0.4) {
+      index = 55;
+    } else if (liters <= 0.6) {
+      index = 58;
+    } else if (liters <= 0.8) {
+      index = 61;
+    } else if (liters <= 1) {
+      index = 63;
+    } else if (liters <= 1.25) {
+      index = 71;
+    } else if (liters <= 1.5) {
+      index = 74;
+    } else if (liters <= 1.75) {
+      index = 77;
     } else if (liters <= 2) {
-      index = 56.94;
+      index = 81;
     } else if (liters <= 3) {
-      index = 67.11;
+      index = 81;
+    } else if (liters <= 4) {
+      index = 87;
+    } else if (liters <= 5) {
+      index = 99;
+    } else if (liters <= 6) {
+      index = 99;
+    } else if (liters <= 7) {
+      index = 112;
+    } else if (liters <= 8) {
+      index = 122;
+    } else if (liters <= 9) {
+      index = 122;
+    } else if (liters <= 10) {
+      index = 122;
+    } else if (liters <= 11) {
+      index = 128;
+    } else if (liters <= 12) {
+      index = 128;
+    } else if (liters <= 13) {
+      index = 136;
+    } else if (liters <= 14) {
+      index = 136;
+    } else if (liters <= 15) {
+      index = 170;
+    } else if (liters <= 17) {
+      index = 182;
+    } else if (liters <= 20) {
+      index = 182;
+    } else if (liters <= 25) {
+      index = 210;
     } else {
-      index = 15.25;
+      index = 210;
     }
 
     // Расчет стоимости логистики
@@ -149,7 +194,7 @@ export default function OzonUnitEconomics() {
 
   const handleCurrencyConversionChange = (
     currency: "usdAmount" | "cnyAmount",
-    value: string
+    value: string,
   ) => {
     const numValue = parseFloat(value) || 0;
     setCurrencyConversion((prev) => ({ ...prev, [currency]: numValue }));
@@ -606,17 +651,6 @@ export default function OzonUnitEconomics() {
               </div>
             </div>
           )}
-
-          {/* Справочная информация по индексам */}
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-            <h4 className="font-medium mb-2">Тарифы Ozon по литражу:</h4>
-            <ul className="text-sm space-y-1">
-              <li>• до 1 литра включительно — 46,77 ₽ за литр</li>
-              <li>• от 1,001 до 2 литров включительно — 56,94 ₽ за литр</li>
-              <li>• от 2,001 до 3 литров включительно — 67,11 ₽ за литр</li>
-              <li>• от 3,001 до 190 литров включительно — 15,25 ₽ за литр</li>
-            </ul>
-          </div>
         </div>
 
         {/* Расчет маржинальности */}
